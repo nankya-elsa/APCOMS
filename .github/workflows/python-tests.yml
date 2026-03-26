@@ -1,0 +1,33 @@
+name: APCOMS Counting Module Tests
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "counting_module/**"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "counting_module/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r counting_module/requirements.txt
+
+      - name: Run tests
+        run: |
+          cd counting_module
+          pytest tests/ -v
