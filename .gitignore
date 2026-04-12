@@ -21,3 +21,8 @@ __pycache__/
 # Windows files
 Thumbs.db
 desktop.ini
+
+# Test video files
+counting_module/data/*.mp4
+counting_module/data/*.avi
+counting_module/data/*.mov
