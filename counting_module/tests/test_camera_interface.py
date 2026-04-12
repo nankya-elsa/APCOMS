@@ -1,6 +1,7 @@
 import pytest
 import os
 import sys
+import cv2
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -31,7 +32,7 @@ class TestCameraInitialization:
         Test that camera defaults to 1080p to provide sufficient
         resolution for accurate person detection by YOLOv8n
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="test_source")
         assert camera.resolution == (1920, 1080)
 
     def test_camera_has_correct_default_framerate(self):
@@ -39,7 +40,7 @@ class TestCameraInitialization:
         Test that camera defaults to 30 FPS to ensure no passengers
         are missed during simultaneous boarding and alighting events
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="test_source")
         assert camera.frame_rate == 30
 
     def test_camera_status_is_inactive_before_start(self):
@@ -47,7 +48,7 @@ class TestCameraInitialization:
         Test that camera status is inactive before starting to confirm
         the system is not processing frames before it is explicitly started
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="test_source")
         assert camera.camera_status == "inactive"
 
     def test_invalid_source_raises_error(self):
@@ -58,6 +59,30 @@ class TestCameraInitialization:
         with pytest.raises(ValueError):
             camera = CameraInterface(source=None)
 
+    def test_camera_applies_resolution_to_capture(self):
+        """
+        Test that resolution settings are applied to the OpenCV capture
+        object so frames are actually captured at 1080p not default size
+        """
+        camera = CameraInterface(source="data/test_video.mp4")
+        camera.start()
+        width = camera.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = camera.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        assert width == 1920
+        assert height == 1080
+        camera.stop()
+
+    def test_camera_applies_framerate_to_capture(self):
+        """
+        Test that 30 FPS setting is applied to the capture object
+        for webcam and Pi Camera sources in real deployment
+        """
+        camera = CameraInterface(source=0)
+        camera.start()
+        fps = camera.cap.get(cv2.CAP_PROP_FPS)
+        assert fps == 30
+        camera.stop()
+
 
 class TestCameraStatus:
 
@@ -66,7 +91,7 @@ class TestCameraStatus:
         Test that camera status changes to active after start is called
         to confirm the system is ready to capture and process frames
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         assert camera.camera_status == "active"
         camera.stop()
@@ -76,7 +101,7 @@ class TestCameraStatus:
         Test that camera status returns to inactive after stop is called
         to confirm the system properly stops processing frames when shut down
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         camera.stop()
         assert camera.camera_status == "inactive"
@@ -89,7 +114,7 @@ class TestCameraCleanup:
         Test that stop() sets cap to None to confirm all camera
         resources are released cleanly and not left hanging
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         camera.stop()
         assert camera.cap is None
@@ -99,7 +124,7 @@ class TestCameraCleanup:
         Test that calling stop() twice does not raise any error to confirm
         the system handles redundant shutdown calls gracefully
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         camera.stop()
         camera.stop()
@@ -146,6 +171,19 @@ class TestCameraFrameCapture:
         assert frame is None
         camera.stop()
 
+    def test_capture_frame_always_outputs_1080p(self):
+        """
+        Test that capture_frame() always outputs 1920x1080 frames
+        regardless of source resolution to ensure consistent input
+        for accurate person detection by YOLOv8n
+        """
+        camera = CameraInterface(source="data/test_video.mp4")
+        camera.start()
+        frame = camera.capture_frame()
+        assert frame.shape[1] == 1920
+        assert frame.shape[0] == 1080
+        camera.stop()
+
 
 class TestCameraHealthMonitoring:
 
@@ -155,7 +193,7 @@ class TestCameraHealthMonitoring:
         to confirm the system reports feed issues for maintenance diagnosis
         """
         import logging
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         with caplog.at_level(logging.WARNING):
             camera._handle_invalid_frame()
@@ -167,7 +205,7 @@ class TestCameraHealthMonitoring:
         Test that camera status is set to error when an invalid frame
         occurs so the System Monitor can detect and respond to feed issues
         """
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         camera._handle_invalid_frame()
         assert camera.camera_status == "error"
@@ -179,9 +217,38 @@ class TestCameraHealthMonitoring:
         the system alerts the System Monitor for immediate action
         """
         import logging
-        camera = CameraInterface(source=0)
+        camera = CameraInterface(source="data/test_video.mp4")
         camera.start()
         with caplog.at_level(logging.ERROR):
             camera._handle_feed_lost()
+        assert "Camera feed lost" in caplog.text
+        camera.stop()
+
+    def test_camera_attempts_reconnection_after_invalid_frame(self):
+        """
+        Test that camera attempts to reconnect after an invalid frame
+        is received to ensure continuous operation without manual intervention
+        """
+        camera = CameraInterface(source="data/test_video.mp4")
+        camera.start()
+        camera._handle_invalid_frame()
+        camera._attempt_reconnection()
+        assert camera.camera_status == "active"
+        camera.stop()
+
+    def test_monitor_health_detects_feed_loss(self, caplog):
+        """
+        Test that monitor_health() detects when no frames are received
+        for 5 seconds and automatically triggers feed lost alert to
+        ensure the System Monitor is notified without manual intervention
+        """
+        import logging
+        import time
+        camera = CameraInterface(source="data/test_video.mp4")
+        camera.start()
+        # simulate no frames received for 5 seconds
+        camera.last_frame_time = time.time() - 6
+        with caplog.at_level(logging.ERROR):
+            camera.monitor_health()
         assert "Camera feed lost" in caplog.text
         camera.stop()
