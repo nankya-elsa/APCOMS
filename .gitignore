@@ -26,3 +26,6 @@ desktop.ini
 counting_module/data/*.mp4
 counting_module/data/*.avi
 counting_module/data/*.mov
+
+# AI model files
+counting_module/models/*.pt
