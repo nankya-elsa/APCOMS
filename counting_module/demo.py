@@ -67,7 +67,7 @@ def log_to_sqlite(conn, event_type, passenger_count, available_seats):
         VALUES (?, ?, ?, ?, ?)
     """, (SHUTTLE_ID, timestamp, event_type, passenger_count, available_seats))
     conn.commit()
-    print(f"  SQLite ✅ | {timestamp} | {event_type} | count: {passenger_count} | available: {available_seats}")
+    print(f"  SQLite  | {timestamp} | {event_type} | count: {passenger_count} | available: {available_seats}")
 
 # ─────────────────────────────────────────
 # PUSH TO FIREBASE
@@ -89,7 +89,7 @@ def push_to_firebase(firebase_ref, passenger_count, available_seats):
         "occupancy_status": status,
         "last_updated": timestamp
     })
-    print(f"  Firebase 🔥 | {timestamp} | count: {passenger_count} | status: {status}")
+    print(f"  Firebase  | {timestamp} | count: {passenger_count} | status: {status}")
 
 # ─────────────────────────────────────────
 # MAIN DEMO
@@ -103,20 +103,20 @@ def main():
     # setup
     print("Setting up SQLite database...")
     conn = setup_sqlite()
-    print("SQLite ready ✅\n")
+    print("SQLite ready \n")
 
     print("Connecting to Firebase...")
     firebase_ref = setup_firebase()
-    print("Firebase connected ✅\n")
+    print("Firebase connected \n")
 
     print("Loading YOLOv8n model...")
     model = YOLO("models/yolov8n.pt")
-    print("YOLOv8n ready ✅\n")
+    print("YOLOv8n ready \n")
 
     print("Starting camera...")
     camera = CameraInterface(source=CAMERA_SOURCE)
     camera.start()
-    print("Camera ready ✅\n")
+    print("Camera ready \n")
 
     print("="*60)
     print("  LIVE PASSENGER DETECTION STARTING...")
