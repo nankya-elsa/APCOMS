@@ -6,6 +6,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from firebase_sync import FirebaseSyncComponent
 
+# skip tests that require real Firebase credentials in CI
+FIREBASE_AVAILABLE = os.path.exists("serviceAccountKey.json")
+
 
 class TestFirebaseSyncInitialization:
 
@@ -45,6 +48,7 @@ class TestFirebaseSyncInitialization:
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         assert sync.offline_queue == []
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_network_status_connected_after_initialization(self):
         """
         Test that network status changes to connected after initialize()
@@ -55,6 +59,7 @@ class TestFirebaseSyncInitialization:
         sync.initialize()
         assert sync.network_status == "connected"
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_initialize_logs_success_message(self, caplog):
         """
         Test that initialize() logs a success message when Firebase
@@ -70,6 +75,7 @@ class TestFirebaseSyncInitialization:
 
 class TestSyncToFirebase:
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_sync_to_firebase_returns_true_on_success(self):
         """
         Test that sync_to_firebase() returns True when data is
@@ -78,7 +84,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -86,10 +91,10 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         result = sync.sync_to_firebase(occupancy_data)
         assert result == True
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_payload_contains_passenger_count(self):
         """
         Test that sync_to_firebase() includes passenger count in the
@@ -98,7 +103,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -106,11 +110,11 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         snapshot = sync.firebase_ref.get()
         assert snapshot["current_count"] == 8
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_payload_contains_available_seats(self):
         """
         Test that sync_to_firebase() includes available seats in the
@@ -119,7 +123,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -127,11 +130,11 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         snapshot = sync.firebase_ref.get()
         assert snapshot["available_seats"] == 12
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_payload_contains_occupancy_status(self):
         """
         Test that sync_to_firebase() includes occupancy status in the
@@ -140,7 +143,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -148,11 +150,11 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         snapshot = sync.firebase_ref.get()
         assert snapshot["occupancy_status"] == "Available"
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_payload_contains_current_stop(self):
         """
         Test that sync_to_firebase() includes current stop in the
@@ -161,7 +163,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -169,11 +170,11 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         snapshot = sync.firebase_ref.get()
         assert snapshot["current_stop"] == "Western Gate"
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_payload_contains_next_stop(self):
         """
         Test that sync_to_firebase() includes next stop in the payload
@@ -182,7 +183,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -190,11 +190,11 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         snapshot = sync.firebase_ref.get()
         assert snapshot["next_stop"] == "CEDAT"
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_payload_contains_timestamp(self):
         """
         Test that sync_to_firebase() includes last updated timestamp
@@ -203,7 +203,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -211,7 +210,6 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         snapshot = sync.firebase_ref.get()
         assert "last_updated" in snapshot
@@ -224,7 +222,6 @@ class TestSyncToFirebase:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.network_status = "offline"
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -232,7 +229,6 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         assert len(sync.offline_queue) == 1
 
@@ -245,7 +241,6 @@ class TestSyncToFirebase:
         import logging
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.network_status = "offline"
-
         occupancy_data = {
             "passenger_count": 8,
             "available_seats": 12,
@@ -253,7 +248,6 @@ class TestSyncToFirebase:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         with caplog.at_level(logging.INFO):
             sync.sync_to_firebase(occupancy_data)
         assert "Device offline, update queued locally" in caplog.text
@@ -278,7 +272,6 @@ class TestOfflineQueue:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.network_status = "offline"
-
         occupancy_data = {
             "passenger_count": 5,
             "available_seats": 15,
@@ -286,10 +279,10 @@ class TestOfflineQueue:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.sync_to_firebase(occupancy_data)
         assert len(sync.offline_queue) == 1
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_queue_cleared_after_successful_sync(self):
         """
         Test that offline queue is cleared after successfully syncing
@@ -298,7 +291,6 @@ class TestOfflineQueue:
         """
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 5,
             "available_seats": 15,
@@ -306,11 +298,11 @@ class TestOfflineQueue:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.offline_queue.append(occupancy_data)
         sync.sync_offline_queue()
         assert len(sync.offline_queue) == 0
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_logs_success_when_queued_update_synced(self, caplog):
         """
         Test that sync_offline_queue() logs success when a queued
@@ -320,7 +312,6 @@ class TestOfflineQueue:
         import logging
         sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
         sync.initialize()
-
         occupancy_data = {
             "passenger_count": 5,
             "available_seats": 15,
@@ -328,7 +319,6 @@ class TestOfflineQueue:
             "current_stop": "Western Gate",
             "next_stop": "CEDAT"
         }
-
         sync.offline_queue.append(occupancy_data)
         with caplog.at_level(logging.INFO):
             sync.sync_offline_queue()
@@ -337,6 +327,7 @@ class TestOfflineQueue:
 
 class TestConnectivityMonitoring:
 
+    @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
     def test_monitor_connectivity_updates_status_to_connected(self, caplog):
         """
         Test that monitor_connectivity() sets network_status to connected
