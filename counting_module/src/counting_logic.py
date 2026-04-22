@@ -28,7 +28,7 @@ class CountingLogic:
         ]
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
-        self.db_path = "local_database/apcoms_demo.db"
+        self.db_path = "local_database/apcoms.db"
 
     def initialize(self):
         """
