@@ -1,8 +1,6 @@
 import cv2
-import sqlite3
 import os
 import sys
-import time
 import datetime
 import firebase_admin
 from firebase_admin import credentials, db
@@ -11,184 +9,146 @@ from ultralytics import YOLO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from camera_interface import CameraInterface
+from counting_logic import CountingLogic
 
-# ─────────────────────────────────────────
-# LOAD ENVIRONMENT VARIABLES
-# ─────────────────────────────────────────
 load_dotenv()
 
 FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL")
-SHUTTLE_ID = os.getenv("SHUTTLE_ID")
 TOTAL_CAPACITY = int(os.getenv("TOTAL_CAPACITY"))
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE")
 
-# ─────────────────────────────────────────
-# SETUP SQLITE
-# ─────────────────────────────────────────
-def setup_sqlite():
-    """Creates the local SQLite database and passenger_events table"""
-    conn = sqlite3.connect("local_database/apcoms_demo.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS passenger_events (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            shuttle_id TEXT,
-            timestamp TEXT,
-            event_type TEXT,
-            passenger_count INTEGER,
-            available_seats INTEGER
-        )
-    """)
-    conn.commit()
-    return conn
 
-# ─────────────────────────────────────────
-# SETUP FIREBASE
-# ─────────────────────────────────────────
 def setup_firebase():
-    """Initializes Firebase connection"""
+    """Initializes Firebase connection and returns database reference"""
     cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
-    firebase_admin.initialize_app(cred, {
-        "databaseURL": FIREBASE_DATABASE_URL
-    })
-    return db.reference(f"shuttles/{SHUTTLE_ID}")
+    firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DATABASE_URL})
+    return db.reference("shuttles/shuttle_001")
 
-# ─────────────────────────────────────────
-# LOG TO SQLITE
-# ─────────────────────────────────────────
-def log_to_sqlite(conn, event_type, passenger_count, available_seats):
-    """Writes a passenger event to SQLite"""
-    cursor = conn.cursor()
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("""
-        INSERT INTO passenger_events
-        (shuttle_id, timestamp, event_type, passenger_count, available_seats)
-        VALUES (?, ?, ?, ?, ?)
-    """, (SHUTTLE_ID, timestamp, event_type, passenger_count, available_seats))
-    conn.commit()
-    print(f"  SQLite  | {timestamp} | {event_type} | count: {passenger_count} | available: {available_seats}")
 
-# ─────────────────────────────────────────
-# PUSH TO FIREBASE
-# ─────────────────────────────────────────
-def push_to_firebase(firebase_ref, passenger_count, available_seats):
-    """Pushes current occupancy state to Firebase"""
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if available_seats > 5:
-        status = "Available"
-    elif available_seats > 0:
-        status = "Nearly Full"
-    else:
-        status = "Full"
+def push_to_firebase(firebase_ref, counter):
+    """Pushes current occupancy and stop data to Firebase Realtime Database"""
+    occupancy = counter.calculate_occupancy()
+    current_stop = counter.get_current_stop()
+    stops = counter.designated_stops_list
+    next_stop_index = (counter.current_stop_index + 1) % len(stops)
+    next_stop = stops[next_stop_index]
 
     firebase_ref.set({
-        "shuttle_id": SHUTTLE_ID,
-        "current_count": passenger_count,
-        "available_seats": available_seats,
-        "occupancy_status": status,
-        "last_updated": timestamp
+        "shuttle_id": "shuttle_001",
+        "current_count": occupancy["passenger_count"],
+        "available_seats": occupancy["available_seats"],
+        "occupancy_status": occupancy["occupancy_status"],
+        "current_stop": current_stop,
+        "next_stop": next_stop,
+        "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     })
-    print(f"  Firebase  | {timestamp} | count: {passenger_count} | status: {status}")
+    print(f"  Firebase | count: {occupancy['passenger_count']} | stop: {current_stop} | next: {next_stop} | status: {occupancy['occupancy_status']}")
 
-# ─────────────────────────────────────────
-# MAIN DEMO
-# ─────────────────────────────────────────
+
 def main():
     print("\n" + "="*60)
-    print("  APCOMS DEMO - AI Passenger Counting System")
+    print("  APCOMS - AI Passenger Counting System")
     print("  Makerere University Driverless E-Shuttle")
     print("="*60 + "\n")
 
-    # setup
-    print("Setting up SQLite database...")
-    conn = setup_sqlite()
-    print("SQLite ready \n")
+    print("Initializing Counting Logic...")
+    counter = CountingLogic(total_capacity=TOTAL_CAPACITY)
+    counter.initialize()
+    print(f"Resuming from count: {counter.passenger_count} passengers")
+    print(f"Current stop: {counter.get_current_stop()}\n")
 
     print("Connecting to Firebase...")
     firebase_ref = setup_firebase()
-    print("Firebase connected \n")
+    print("Firebase connected\n")
 
     print("Loading YOLOv8n model...")
     model = YOLO("models/yolov8n.pt")
-    print("YOLOv8n ready \n")
+    print("YOLOv8n ready\n")
 
     print("Starting camera...")
     camera = CameraInterface(source=CAMERA_SOURCE)
     camera.start()
-    print("Camera ready \n")
+    print("Camera ready\n")
 
     print("="*60)
-    print("  LIVE PASSENGER DETECTION STARTING...")
+    print("  LIVE PASSENGER DETECTION STARTING")
     print("="*60 + "\n")
 
-    passenger_count = 0
-    available_seats = TOTAL_CAPACITY
     frame_count = 0
-    last_log_time = time.time()
     last_person_count = 0
+    track_id_counter = 1000
 
     while True:
         frame = camera.capture_frame()
         if frame is None:
-            print("\n video ended!")
+            print("\nVideo ended.")
             break
 
         frame_count += 1
 
-        # run YOLOv8n detection every 10 frames for speed
         if frame_count % 10 == 0:
             results = model(frame, verbose=False)
 
-            # count persons detected in this frame
             current_persons = 0
             for result in results:
                 for box in result.boxes:
-                    if int(box.cls[0]) == 0:  # class 0 = person
+                    if int(box.cls[0]) == 0:
                         current_persons += 1
-
-                        # draw bounding box on frame
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.putText(frame, "Person", (x1, y1-10),
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            # simulate boarding if more people detected than before
             if current_persons > last_person_count:
-                passenger_count = min(passenger_count + 1, TOTAL_CAPACITY)
-                available_seats = TOTAL_CAPACITY - passenger_count
-                print(f"\n Person detected - BOARDING event!")
-                log_to_sqlite(conn, "boarding", passenger_count, available_seats)
-                push_to_firebase(firebase_ref, passenger_count, available_seats)
-                last_log_time = time.time()
+                track_id_counter += 1
+                track = {
+                    "track_id": track_id_counter,
+                    "previous_centroid": (960, 200),
+                    "current_centroid": (960, 700)
+                }
+                counter.update_count(track)
+                print(f"\nBoarding event detected at {counter.get_current_stop()}")
+                push_to_firebase(firebase_ref, counter)
+
+            elif current_persons < last_person_count and counter.passenger_count > 0:
+                track_id_counter += 1
+                track = {
+                    "track_id": track_id_counter,
+                    "previous_centroid": (960, 700),
+                    "current_centroid": (960, 200)
+                }
+                counter.update_count(track)
+                print(f"\nAlighting event detected at {counter.get_current_stop()}")
+                push_to_firebase(firebase_ref, counter)
 
             last_person_count = current_persons
 
-            # draw occupancy info on frame
-            cv2.putText(frame, f"Passengers: {passenger_count}/{TOTAL_CAPACITY}",
+            cv2.putText(frame, f"Passengers: {counter.passenger_count}/{TOTAL_CAPACITY}",
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv2.putText(frame, f"Available: {available_seats}",
+            cv2.putText(frame, f"Available: {counter.available_seats}",
                        (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, f"Stop: {counter.get_current_stop()}",
+                       (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
 
-            # show frame
             cv2.imshow("APCOMS - Live Detection", frame)
 
-        # press q to quit
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("\n Demo stopped by user!")
+            print("\nDemo stopped by user.")
             break
 
-    # cleanup
+    counter.advance_stop()
+    print(f"\nAdvanced to next stop: {counter.get_current_stop()}")
+
     camera.stop()
     cv2.destroyAllWindows()
-    conn.close()
 
     print("\n" + "="*60)
-    print("  DEMO COMPLETE!")
-    print(f"  Total frames processed: {frame_count}")
-    print(f"  Final passenger count: {passenger_count}")
-    print(f"  Check local_database/apcoms_demo.db for logged data!")
+    print("  DEMO COMPLETE")
+    print(f"  Final passenger count: {counter.passenger_count}")
+    print(f"  Current stop: {counter.get_current_stop()}")
     print("="*60 + "\n")
+
 
 if __name__ == "__main__":
     main()
