@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 def get_db_data():
     """Reads current occupancy, recent events and system state from SQLite"""
-    conn = sqlite3.connect("local_database/apcoms_demo.db")
+    conn = sqlite3.connect("local_database/apcoms.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
