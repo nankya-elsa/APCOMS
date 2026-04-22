@@ -29,3 +29,6 @@ counting_module/data/*.mov
 
 # AI model files
 counting_module/models/*.pt
+
+# Local database
+counting_module/local_database/*.db
