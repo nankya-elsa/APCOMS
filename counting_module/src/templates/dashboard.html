@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>APCOMS - Monitoring Dashboard</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: #0f1117;
+        color: #ffffff;
+        min-height: 100vh;
+      }
+
+      /* NAVBAR */
+      .navbar {
+        background: #1a1d27;
+        border-bottom: 1px solid #2a2d3a;
+        padding: 0 30px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 60px;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+
+      .navbar-brand {
+        font-size: 18px;
+        font-weight: 700;
+        color: #4f9ef7;
+        letter-spacing: 2px;
+      }
+
+      .navbar-brand span {
+        color: #8b8fa8;
+        font-size: 12px;
+        font-weight: 400;
+        margin-left: 10px;
+        letter-spacing: 1px;
+      }
+
+      .navbar-right {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+
+      .admin-badge {
+        background: #2a2d3a;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 12px;
+        color: #8b8fa8;
+      }
+
+      .btn-logout {
+        background: transparent;
+        border: 1px solid #ef4444;
+        color: #ef4444;
+        padding: 6px 16px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: all 0.2s;
+      }
+
+      .btn-logout:hover {
+        background: #ef4444;
+        color: white;
+      }
+
+      /* TABS */
+      .tabs {
+        background: #1a1d27;
+        border-bottom: 1px solid #2a2d3a;
+        padding: 0 30px;
+        display: flex;
+        gap: 0;
+      }
+
+      .tab-btn {
+        padding: 14px 24px;
+        background: transparent;
+        border: none;
+        color: #8b8fa8;
+        font-size: 14px;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+        letter-spacing: 0.5px;
+      }
+
+      .tab-btn:hover {
+        color: #ffffff;
+      }
+
+      .tab-btn.active {
+        color: #4f9ef7;
+        border-bottom: 2px solid #4f9ef7;
+      }
+
+      /* CONTENT */
+      .content {
+        padding: 30px;
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+
+      /* CARDS */
+      .cards-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      .card {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 20px;
+      }
+
+      .card-label {
+        font-size: 11px;
+        color: #8b8fa8;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+      }
+
+      .card-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: #ffffff;
+      }
+
+      .card-value.green {
+        color: #22c55e;
+      }
+      .card-value.yellow {
+        color: #eab308;
+      }
+      .card-value.red {
+        color: #ef4444;
+      }
+      .card-value.blue {
+        color: #4f9ef7;
+      }
+
+      .card-sub {
+        font-size: 12px;
+        color: #8b8fa8;
+        margin-top: 6px;
+      }
+
+      /* STATUS BADGE */
+      .status-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .status-active {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+      }
+      .status-error {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+      }
+      .status-warning {
+        background: rgba(234, 179, 8, 0.15);
+        color: #eab308;
+      }
+
+      /* TWO COLUMN LAYOUT */
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      .panel {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 20px;
+      }
+
+      .panel-title {
+        font-size: 13px;
+        color: #8b8fa8;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #2a2d3a;
+      }
+
+      .status-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #1f2230;
+        font-size: 14px;
+      }
+
+      .status-row:last-child {
+        border-bottom: none;
+      }
+      .status-key {
+        color: #8b8fa8;
+      }
+      .status-val {
+        color: #ffffff;
+        font-weight: 500;
+      }
+
+      /* LOGS TABLE */
+      .logs-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .logs-table th {
+        text-align: left;
+        padding: 10px 12px;
+        color: #8b8fa8;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        border-bottom: 1px solid #2a2d3a;
+      }
+
+      .logs-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #1f2230;
+        color: #d1d5db;
+      }
+
+      .logs-table tr:last-child td {
+        border-bottom: none;
+      }
+
+      .log-type {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .log-info {
+        background: rgba(79, 158, 247, 0.15);
+        color: #4f9ef7;
+      }
+      .log-warning {
+        background: rgba(234, 179, 8, 0.15);
+        color: #eab308;
+      }
+      .log-error {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+      }
+
+      /* ANALYTICS */
+      .analytics-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      /* EXPORT FORM */
+      .export-panel {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 24px;
+      }
+
+      .filter-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr) auto;
+        gap: 12px;
+        align-items: end;
+      }
+
+      .filter-group label {
+        display: block;
+        font-size: 11px;
+        color: #8b8fa8;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+      }
+
+      .filter-group input,
+      .filter-group select {
+        width: 100%;
+        padding: 9px 12px;
+        background: #0f1117;
+        border: 1px solid #2a2d3a;
+        border-radius: 6px;
+        color: #ffffff;
+        font-size: 13px;
+        outline: none;
+      }
+
+      .btn-export {
+        padding: 9px 20px;
+        background: #4f9ef7;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .btn-export:hover {
+        background: #3d8de6;
+      }
+
+      /* SETTINGS */
+      .settings-panel {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 24px;
+        margin-bottom: 24px;
+      }
+
+      .settings-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: #ffffff;
+        margin-bottom: 6px;
+      }
+
+      .settings-desc {
+        font-size: 13px;
+        color: #8b8fa8;
+        margin-bottom: 20px;
+      }
+
+      .settings-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+
+      .settings-group label {
+        display: block;
+        font-size: 11px;
+        color: #8b8fa8;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+      }
+
+      .settings-group input,
+      .settings-group textarea {
+        width: 100%;
+        padding: 10px 14px;
+        background: #0f1117;
+        border: 1px solid #2a2d3a;
+        border-radius: 6px;
+        color: #ffffff;
+        font-size: 13px;
+        outline: none;
+        resize: vertical;
+      }
+
+      .settings-group textarea {
+        min-height: 80px;
+      }
+
+      .btn-save {
+        padding: 10px 24px;
+        background: #22c55e;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .btn-save:hover {
+        background: #16a34a;
+      }
+
+      /* DANGER ZONE */
+      .danger-panel {
+        background: #1a1d27;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 10px;
+        padding: 24px;
+      }
+
+      .danger-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: #ef4444;
+        margin-bottom: 6px;
+      }
+
+      .danger-desc {
+        font-size: 13px;
+        color: #8b8fa8;
+        margin-bottom: 20px;
+      }
+
+      .btn-danger {
+        padding: 10px 24px;
+        background: transparent;
+        border: 1px solid #ef4444;
+        border-radius: 6px;
+        color: #ef4444;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .btn-danger:hover {
+        background: #ef4444;
+        color: white;
+      }
+
+      /* SUCCESS/ERROR MESSAGES */
+      .alert {
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        margin-bottom: 16px;
+        display: none;
+      }
+
+      .alert-success {
+        background: rgba(34, 197, 94, 0.15);
+        border: 1px solid rgba(34, 197, 94, 0.4);
+        color: #22c55e;
+      }
+
+      .alert-error {
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        color: #ef4444;
+      }
+
+      /* AUTO REFRESH */
+      .last-updated {
+        font-size: 11px;
+        color: #8b8fa8;
+        text-align: right;
+        margin-bottom: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- NAVBAR -->
+    <nav class="navbar">
+      <div>
+        <span class="navbar-brand">APCOMS</span>
+        <span class="navbar-brand" style="font-size: 13px; color: #8b8fa8">
+          Makerere University E-Shuttle
+        </span>
+      </div>
+      <div class="navbar-right">
+        <span class="admin-badge">KMC Admin</span>
+        <a href="/logout" class="btn-logout">Logout</a>
+      </div>
+    </nav>
+
+    <!-- TABS -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('monitoring')">
+        System Monitoring
+      </button>
+      <button class="tab-btn" onclick="switchTab('analytics')">
+        Analytics
+      </button>
+      <button class="tab-btn" onclick="switchTab('settings')">Settings</button>
+    </div>
+
+    <div class="content">
+      <!-- TAB 1: SYSTEM MONITORING -->
+      <div id="tab-monitoring" class="tab-content active">
+        <div class="last-updated" id="last-updated">
+          Last updated: {{ data.occupancy.last_updated }}
+        </div>
+
+        <!-- OCCUPANCY CARDS -->
+        <div class="cards-grid">
+          <div class="card">
+            <div class="card-label">Passengers Onboard</div>
+            <div class="card-value blue" id="passenger-count">
+              {{ data.occupancy.current_count }}
+            </div>
+            <div class="card-sub">Current count</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Available Seats</div>
+            <div class="card-value green" id="available-seats">
+              {{ data.occupancy.available_seats }}
+            </div>
+            <div class="card-sub">Remaining capacity</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Occupancy Status</div>
+            <div class="card-value" id="occupancy-status">
+              {% if data.occupancy.occupancy_status == "Available" %}
+              <span class="status-badge status-active">Available</span>
+              {% elif data.occupancy.occupancy_status == "Nearly Full" %}
+              <span class="status-badge status-warning">Nearly Full</span>
+              {% else %}
+              <span class="status-badge status-error">Full</span>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Current Stop</div>
+            <div class="card-value" style="font-size: 18px" id="current-stop">
+              {{ data.occupancy.current_stop }}
+            </div>
+            <div class="card-sub">Shuttle location</div>
+          </div>
+        </div>
+
+        <!-- SYSTEM STATUS + LOGS -->
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-title">System Status</div>
+            <div class="status-row">
+              <span class="status-key">System</span>
+              <span class="status-val">
+                {% if data.system_status.system_status == "Active" %}
+                <span class="status-badge status-active">Active</span>
+                {% elif data.system_status.system_status == "Error" %}
+                <span class="status-badge status-error">Error</span>
+                {% else %}
+                <span class="status-badge status-warning">
+                  {{ data.system_status.system_status }}
+                </span>
+                {% endif %}
+              </span>
+            </div>
+            <div class="status-row">
+              <span class="status-key">Camera</span>
+              <span class="status-val">
+                {% if data.system_status.camera_status == "ok" %}
+                <span class="status-badge status-active">OK</span>
+                {% else %}
+                <span class="status-badge status-error">Error</span>
+                {% endif %}
+              </span>
+            </div>
+            <div class="status-row">
+              <span class="status-key">AI Processing</span>
+              <span class="status-val"> {{ data.system_status.fps }} FPS </span>
+            </div>
+            <div class="status-row">
+              <span class="status-key">Latency</span>
+              <span class="status-val">
+                {{ data.system_status.latency_ms }} ms
+              </span>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Recent Diagnostic Logs</div>
+            {% if data.diagnostic_logs %}
+            <table class="logs-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for log in data.diagnostic_logs %}
+                <tr>
+                  <td>{{ log.timestamp }}</td>
+                  <td>
+                    <span class="log-type log-{{ log.log_type }}">
+                      {{ log.log_type }}
+                    </span>
+                  </td>
+                  <td>{{ log.message }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p style="color: #8b8fa8; font-size: 13px">
+              No diagnostic logs yet.
+            </p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: ANALYTICS -->
+      <div id="tab-analytics" class="tab-content">
+        <!-- ANALYTICS CARDS -->
+        <div class="analytics-grid">
+          <div class="card">
+            <div class="card-label">Boardings Today</div>
+            <div class="card-value blue">
+              {{ analytics.total_boardings_today }}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-label">Alightings Today</div>
+            <div class="card-value blue">
+              {{ analytics.total_alightings_today }}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-label">Peak Hour</div>
+            <div class="card-value" style="font-size: 22px">
+              {{ analytics.peak_hour }}
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-label">Most Popular Stop</div>
+            <div class="card-value" style="font-size: 16px">
+              {{ analytics.most_popular_stop }}
+            </div>
+          </div>
+        </div>
+
+        <!-- EXPORT PANEL -->
+        <div class="export-panel">
+          <div class="panel-title">Export Passenger Data</div>
+          <div class="filter-row">
+            <div class="filter-group">
+              <label>From Date</label>
+              <input type="date" id="start-date" />
+            </div>
+            <div class="filter-group">
+              <label>To Date</label>
+              <input type="date" id="end-date" />
+            </div>
+            <div class="filter-group">
+              <label>Direction</label>
+              <select id="direction">
+                <option value="">All</option>
+                <option value="boarding">Boarding</option>
+                <option value="alighting">Alighting</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>Stop Location</label>
+              <input
+                type="text"
+                id="stop-location"
+                placeholder="e.g. Western Gate"
+              />
+            </div>
+            <button class="btn-export" onclick="exportData()">
+              Export CSV
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: SETTINGS -->
+      <div id="tab-settings" class="tab-content">
+        <div id="settings-alert" class="alert"></div>
+
+        <!-- SHUTTLE CONFIG -->
+        <div class="settings-panel">
+          <div class="settings-title">Shuttle Configuration</div>
+          <div class="settings-desc">
+            Update shuttle details and stops. Changes take effect on next system
+            restart.
+          </div>
+          <div class="settings-grid">
+            <div class="settings-group">
+              <label>Shuttle ID</label>
+              <input
+                type="text"
+                id="shuttle-id"
+                placeholder="e.g. shuttle_001"
+              />
+            </div>
+            <div class="settings-group">
+              <label>Shuttle Name</label>
+              <input
+                type="text"
+                id="shuttle-name"
+                placeholder="e.g. Makerere E-Shuttle 1"
+              />
+            </div>
+            <div class="settings-group">
+              <label>Total Capacity</label>
+              <input type="number" id="total-capacity" placeholder="e.g. 20" />
+            </div>
+            <div class="settings-group">
+              <label>Designated Stops (comma separated)</label>
+              <textarea
+                id="designated-stops"
+                placeholder="Western Gate, CEDAT, CONAS, Main Library..."
+              >
+              </textarea>
+            </div>
+          </div>
+          <button class="btn-save" onclick="saveSettings()">
+            Save Settings
+          </button>
+        </div>
+
+        <!-- DANGER ZONE -->
+        <div class="danger-panel">
+          <div class="danger-title">Danger Zone</div>
+          <div class="danger-desc">
+            Reset the passenger count to zero. Use this only when necessary
+            after discussion with the operations team.
+          </div>
+          <button class="btn-danger" onclick="confirmReset()">
+            Reset Count
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // TAB SWITCHING
+      function switchTab(tab) {
+        document
+          .querySelectorAll(".tab-content")
+          .forEach((t) => t.classList.remove("active"));
+        document
+          .querySelectorAll(".tab-btn")
+          .forEach((b) => b.classList.remove("active"));
+        document.getElementById("tab-" + tab).classList.add("active");
+        event.target.classList.add("active");
+      }
+
+      // AUTO REFRESH every 5 seconds
+      setInterval(function () {
+        fetch("/api/status")
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.occupancy) {
+              document.getElementById("passenger-count").textContent =
+                data.occupancy.current_count;
+              document.getElementById("available-seats").textContent =
+                data.occupancy.available_seats;
+              document.getElementById("current-stop").textContent =
+                data.occupancy.current_stop;
+              document.getElementById("last-updated").textContent =
+                "Last updated: " + data.occupancy.last_updated;
+            }
+          })
+          .catch((err) => console.log("Refresh error:", err));
+      }, 5000);
+
+      // EXPORT DATA
+      function exportData() {
+        const start = document.getElementById("start-date").value;
+        const end = document.getElementById("end-date").value;
+        const direction = document.getElementById("direction").value;
+        const stop = document.getElementById("stop-location").value;
+
+        let url = "/export?";
+        if (start) url += "start_date=" + start + "&";
+        if (end) url += "end_date=" + end + "&";
+        if (direction) url += "direction=" + direction + "&";
+        if (stop) url += "stop_location=" + encodeURIComponent(stop) + "&";
+
+        window.location.href = url;
+      }
+
+      // SAVE SETTINGS
+      function saveSettings() {
+        const shuttleId = document.getElementById("shuttle-id").value;
+        const shuttleName = document.getElementById("shuttle-name").value;
+        const capacity = parseInt(
+          document.getElementById("total-capacity").value,
+        );
+        const stopsText = document.getElementById("designated-stops").value;
+        const stops = stopsText
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s);
+
+        fetch("/setup_shuttle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shuttle_id: shuttleId,
+            shuttle_name: shuttleName,
+            total_capacity: capacity,
+            designated_stops: stops,
+          }),
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            const alert = document.getElementById("settings-alert");
+            if (data.status === "success") {
+              alert.className = "alert alert-success";
+              alert.textContent =
+                "Settings saved successfully! Restart system to apply changes.";
+            } else {
+              alert.className = "alert alert-error";
+              alert.textContent =
+                "Failed to save settings. Please check all fields.";
+            }
+            alert.style.display = "block";
+            setTimeout(() => (alert.style.display = "none"), 4000);
+          });
+      }
+
+      // RESET COUNT
+      function confirmReset() {
+        if (
+          confirm(
+            "Are you sure you want to reset the passenger count to zero? This action cannot be undone.",
+          )
+        ) {
+          fetch("/reset_count", { method: "POST" })
+            .then((r) => r.json())
+            .then((data) => {
+              alert("Count reset successfully!");
+            })
+            .catch((err) => alert("Reset failed. Please try again."));
+        }
+      }
+    </script>
+  </body>
+</html>
