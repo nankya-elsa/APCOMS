@@ -17,6 +17,21 @@ class CountingLogic:
         self.current_stop_index = 0
         self.passenger_count = 0
 
+        # ensure tables exist
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
         # read total_capacity from SQLite if not provided
         if total_capacity is None:
             try:
@@ -59,34 +74,47 @@ class CountingLogic:
         """
         Reads last passenger count and stop index from SQLite so
         counting and stop tracking continues from where it left off.
+        Creates tables if they don't exist.
         """
-        if os.path.exists(self.db_path):
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
 
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS system_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                )
-            """)
-            conn.commit()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS passenger_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shuttle_id TEXT,
+                timestamp TEXT,
+                direction TEXT,
+                passenger_count INTEGER,
+                available_seats INTEGER,
+                stop_location TEXT
+            )
+        """)
 
-            cursor.execute("""
-                SELECT passenger_count FROM passenger_events
-                ORDER BY event_id DESC LIMIT 1
-            """)
-            result = cursor.fetchone()
-            if result:
-                self.passenger_count = result[0]
-                self.available_seats = self.total_capacity - self.passenger_count
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
 
-            cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
-            stop_result = cursor.fetchone()
-            if stop_result:
-                self.current_stop_index = int(stop_result[0])
+        conn.commit()
 
-            conn.close()
+        cursor.execute("""
+            SELECT passenger_count FROM passenger_events
+            ORDER BY event_id DESC LIMIT 1
+        """)
+        result = cursor.fetchone()
+        if result:
+            self.passenger_count = result[0]
+            self.available_seats = self.total_capacity - self.passenger_count
+
+        cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
+        stop_result = cursor.fetchone()
+        if stop_result:
+            self.current_stop_index = int(stop_result[0])
+
+        conn.close()
         logger.info("Counting Logic initialized successfully")
 
     def determine_direction(self, track):
