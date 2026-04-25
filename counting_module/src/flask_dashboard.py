@@ -20,6 +20,7 @@ class FlaskDashboard:
         and logs success when dashboard is ready. Falls back to
         local access only if ngrok tunnel fails.
         """
+        self.setup_routes()
         try:
             from pyngrok import ngrok
             token = os.getenv("NGROK_AUTH_TOKEN")
@@ -344,3 +345,106 @@ class FlaskDashboard:
         except Exception:
             logger.error("Shuttle setup failed - database error")
             return False
+
+    def setup_routes(self):
+        """
+        Configures all Flask URL routes for the dashboard.
+        Sets up login, logout, dashboard, analytics and settings routes.
+        """
+        from flask import render_template, request, redirect, url_for, session
+
+        app = self.app
+        app.secret_key = os.getenv("FLASK_SECRET_KEY", "apcoms_secret_key_2026")
+
+        @app.route("/")
+        def index():
+            if "logged_in" in session:
+                return redirect(url_for("dashboard"))
+            return redirect(url_for("login"))
+
+        @app.route("/login", methods=["GET", "POST"])
+        def login():
+            error = None
+            if request.method == "POST":
+                username = request.form.get("username")
+                password = request.form.get("password")
+                if self.authenticate(username, password):
+                    session["logged_in"] = True
+                    session["expiry"] = (
+                        __import__("datetime").datetime.now() +
+                        __import__("datetime").timedelta(minutes=self.session_timeout)
+                    ).isoformat()
+                    return redirect(url_for("dashboard"))
+                else:
+                    if self.account_locked:
+                        error = "Account locked. Restart system to unlock."
+                    else:
+                        error = "Invalid credentials. Please try again."
+            return render_template("login.html", error=error)
+
+        @app.route("/logout")
+        def logout():
+            session.clear()
+            return redirect(url_for("login"))
+
+        @app.route("/dashboard")
+        def dashboard():
+            if "logged_in" not in session:
+                return redirect(url_for("login"))
+            data = self.render_dashboard()
+            analytics = self.generate_analytics()
+            return render_template("dashboard.html",
+                                 data=data,
+                                 analytics=analytics)
+
+        @app.route("/export")
+        def export():
+            if "logged_in" not in session:
+                return redirect(url_for("login"))
+            from flask import Response
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+            direction = request.args.get("direction")
+            stop_location = request.args.get("stop_location")
+            csv_data = self.export_data(
+                start_date=start_date,
+                end_date=end_date,
+                direction=direction,
+                stop_location=stop_location
+            )
+            return Response(
+                csv_data,
+                mimetype="text/csv",
+                headers={"Content-Disposition": "attachment; filename=apcoms_data.csv"}
+            )
+
+        @app.route("/reset_count", methods=["POST"])
+        def reset_count():
+            if "logged_in" not in session:
+                return redirect(url_for("login"))
+            from flask import jsonify
+            logger.info("Count reset by administrator")
+            return jsonify({"status": "success", "message": "Count reset successfully"})
+
+        @app.route("/setup_shuttle", methods=["POST"])
+        def setup_shuttle_route():
+            if "logged_in" not in session:
+                return redirect(url_for("login"))
+            from flask import jsonify, request
+            data = request.get_json()
+            result = self.setup_shuttle(
+                shuttle_id=data.get("shuttle_id"),
+                shuttle_name=data.get("shuttle_name"),
+                total_capacity=data.get("total_capacity"),
+                designated_stops=data.get("designated_stops")
+            )
+            if result:
+                return jsonify({"status": "success"})
+            return jsonify({"status": "error"})
+
+        @app.route("/api/status")
+        def api_status():
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            data = self.render_dashboard()
+            return __import__("flask").jsonify(data)
