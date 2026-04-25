@@ -296,3 +296,51 @@ class FlaskDashboard:
 
         logger.info(f"Alert displayed on dashboard: {message}")
         return message
+
+    def setup_shuttle(self, shuttle_id, shuttle_name, total_capacity, designated_stops):
+        """
+        Writes shuttle configuration to SQLite system_state table
+        so CountingLogic can read updated settings on next startup.
+        Validates all fields before writing.
+        Returns True on success, False on failure.
+        Logs success when shuttle setup is complete.
+        """
+        import sqlite3
+        import json
+
+        if not shuttle_id or not shuttle_name or not total_capacity or not designated_stops:
+            logger.warning("Shuttle setup failed - missing required fields")
+            return False
+
+        try:
+            conn = sqlite3.connect("local_database/apcoms.db")
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('total_capacity', ?)
+            """, (str(total_capacity),))
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('designated_stops', ?)
+            """, (json.dumps(designated_stops),))
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('shuttle_id', ?)
+            """, (shuttle_id,))
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('shuttle_name', ?)
+            """, (shuttle_name,))
+
+            conn.commit()
+            conn.close()
+            logger.info("Shuttle setup completed successfully")
+            return True
+
+        except Exception:
+            logger.error("Shuttle setup failed - database error")
+            return False

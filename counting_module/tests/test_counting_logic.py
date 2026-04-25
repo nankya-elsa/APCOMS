@@ -75,6 +75,78 @@ class TestCountingLogicInitialization:
         counter = CountingLogic(total_capacity=20)
         assert counter.current_stop_index == 0
 
+    def test_reads_total_capacity_from_sqlite_if_available(self):
+        """
+        Test that CountingLogic reads total_capacity from SQLite
+        system_state table if it exists so fleet managers can update
+        shuttle capacity via Flask Dashboard without changing code
+        """
+        import sqlite3
+        conn = sqlite3.connect("local_database/apcoms.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO system_state (key, value)
+            VALUES ('total_capacity', '15')
+        """)
+        conn.commit()
+        conn.close()
+
+        logic = CountingLogic()
+        assert logic.total_capacity == 15
+
+    def test_reads_stops_from_sqlite_if_available(self):
+        """
+        Test that CountingLogic reads designated_stops from SQLite
+        system_state table if it exists so fleet managers can update
+        shuttle stops via Flask Dashboard without changing code
+        """
+        import sqlite3
+        import json
+        stops = ["Stop A", "Stop B", "Stop C"]
+        conn = sqlite3.connect("local_database/apcoms.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO system_state (key, value)
+            VALUES ('designated_stops', ?)
+        """, (json.dumps(stops),))
+        conn.commit()
+        conn.close()
+
+        logic = CountingLogic()
+        assert logic.designated_stops_list == stops
+
+    def test_falls_back_to_default_capacity_if_not_in_sqlite(self):
+        """
+        Test that CountingLogic falls back to default capacity of 20
+        when system_state table has no capacity entry so the system
+        works correctly on first deployment before setup_shuttle() runs
+        """
+        import sqlite3
+        conn = sqlite3.connect("local_database/apcoms.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM system_state WHERE key='total_capacity'")
+        conn.commit()
+        conn.close()
+
+        logic = CountingLogic()
+        assert logic.total_capacity == 20
+
+    def test_falls_back_to_default_stops_if_not_in_sqlite(self):
+        """
+        Test that CountingLogic falls back to hardcoded stops list
+        when system_state table has no stops entry so the system
+        works correctly on first deployment before setup_shuttle() runs
+        """
+        import sqlite3
+        conn = sqlite3.connect("local_database/apcoms.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM system_state WHERE key='designated_stops'")
+        conn.commit()
+        conn.close()
+
+        logic = CountingLogic()
+        assert len(logic.designated_stops_list) > 0
+
 
 class TestDirectionDetermination:
 

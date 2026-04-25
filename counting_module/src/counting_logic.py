@@ -7,38 +7,20 @@ logger = logging.getLogger(__name__)
 
 class CountingLogic:
 
-    def __init__(self, total_capacity):
-        self.total_capacity = total_capacity
-        self.passenger_count = 0
-        self.available_seats = total_capacity
-        self.counted_tracks = []
-        self.current_stop_index = 0
-        self.designated_stops_list = [
-            "Western Gate",
-            "CEDAT",
-            "CONAS",
-            "Main Library",
-            "Africa Hall",
-            "Swimming Pool",
-            "Mitchel Hall",
-            "COCIS",
-            "Complex Hall",
-            "CEES",
-            "Lumumba Hall"
-        ]
+    def __init__(self, total_capacity=None):
+        import json
+
+        self.db_path = "local_database/apcoms.db"
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
-        self.db_path = "local_database/apcoms.db"
+        self.counted_tracks = []
+        self.current_stop_index = 0
+        self.passenger_count = 0
 
-    def initialize(self):
-        """
-        Reads last passenger count and stop index from SQLite so
-        counting and stop tracking continues from where it left off.
-        """
-        if os.path.exists(self.db_path):
+        # ensure tables exist
+        try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS system_state (
                     key TEXT PRIMARY KEY,
@@ -46,22 +28,93 @@ class CountingLogic:
                 )
             """)
             conn.commit()
-
-            cursor.execute("""
-                SELECT passenger_count FROM passenger_events
-                ORDER BY event_id DESC LIMIT 1
-            """)
-            result = cursor.fetchone()
-            if result:
-                self.passenger_count = result[0]
-                self.available_seats = self.total_capacity - self.passenger_count
-
-            cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
-            stop_result = cursor.fetchone()
-            if stop_result:
-                self.current_stop_index = int(stop_result[0])
-
             conn.close()
+        except Exception:
+            pass
+
+        # read total_capacity from SQLite if not provided
+        if total_capacity is None:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
+                row = cursor.fetchone()
+                self.total_capacity = int(row[0]) if row else 20
+                conn.close()
+            except Exception:
+                self.total_capacity = 20
+        else:
+            self.total_capacity = total_capacity
+
+        self.available_seats = self.total_capacity
+
+        # read stops from SQLite if available
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
+            row = cursor.fetchone()
+            if row:
+                self.designated_stops_list = json.loads(row[0])
+            else:
+                self.designated_stops_list = [
+                    "Western Gate", "CEDAT", "CONAS", "Main Library",
+                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
+                ]
+            conn.close()
+        except Exception:
+            self.designated_stops_list = [
+                "Western Gate", "CEDAT", "CONAS", "Main Library",
+                "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
+            ]
+
+    def initialize(self):
+        """
+        Reads last passenger count and stop index from SQLite so
+        counting and stop tracking continues from where it left off.
+        Creates tables if they don't exist.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS passenger_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shuttle_id TEXT,
+                timestamp TEXT,
+                direction TEXT,
+                passenger_count INTEGER,
+                available_seats INTEGER,
+                stop_location TEXT
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
+        conn.commit()
+
+        cursor.execute("""
+            SELECT passenger_count FROM passenger_events
+            ORDER BY event_id DESC LIMIT 1
+        """)
+        result = cursor.fetchone()
+        if result:
+            self.passenger_count = result[0]
+            self.available_seats = self.total_capacity - self.passenger_count
+
+        cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
+        stop_result = cursor.fetchone()
+        if stop_result:
+            self.current_stop_index = int(stop_result[0])
+
+        conn.close()
         logger.info("Counting Logic initialized successfully")
 
     def determine_direction(self, track):
