@@ -7,28 +7,53 @@ logger = logging.getLogger(__name__)
 
 class CountingLogic:
 
-    def __init__(self, total_capacity):
-        self.total_capacity = total_capacity
-        self.passenger_count = 0
-        self.available_seats = total_capacity
-        self.counted_tracks = []
-        self.current_stop_index = 0
-        self.designated_stops_list = [
-            "Western Gate",
-            "CEDAT",
-            "CONAS",
-            "Main Library",
-            "Africa Hall",
-            "Swimming Pool",
-            "Mitchel Hall",
-            "COCIS",
-            "Complex Hall",
-            "CEES",
-            "Lumumba Hall"
-        ]
+    def __init__(self, total_capacity=None):
+        import json
+
+        self.db_path = "local_database/apcoms.db"
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
-        self.db_path = "local_database/apcoms.db"
+        self.counted_tracks = []
+        self.current_stop_index = 0
+        self.passenger_count = 0
+
+        # read total_capacity from SQLite if not provided
+        if total_capacity is None:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
+                row = cursor.fetchone()
+                self.total_capacity = int(row[0]) if row else 20
+                conn.close()
+            except Exception:
+                self.total_capacity = 20
+        else:
+            self.total_capacity = total_capacity
+
+        self.available_seats = self.total_capacity
+
+        # read stops from SQLite if available
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
+            row = cursor.fetchone()
+            if row:
+                self.designated_stops_list = json.loads(row[0])
+            else:
+                self.designated_stops_list = [
+                    "Western Gate", "CEDAT", "CONAS", "Main Library",
+                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
+                ]
+            conn.close()
+        except Exception:
+            self.designated_stops_list = [
+                "Western Gate", "CEDAT", "CONAS", "Main Library",
+                "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
+            ]
 
     def initialize(self):
         """
