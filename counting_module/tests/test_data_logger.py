@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from data_logger import DataLogger
 
+TEST_DB = "local_database/test_apcoms.db"
+
 
 class TestDataLoggerInitialization:
 
@@ -15,7 +17,7 @@ class TestDataLoggerInitialization:
         has a logger ready to write passenger events and diagnostic
         data to the SQLite database
         """
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         assert logger is not None
 
     def test_shuttle_id_is_stored_correctly(self):
@@ -24,7 +26,7 @@ class TestDataLoggerInitialization:
         and diagnostics are correctly tagged to the right shuttle
         for accurate data analysis and route optimization
         """
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         assert logger.shuttle_id == "shuttle_001"
 
     def test_db_path_is_stored_correctly(self):
@@ -42,7 +44,7 @@ class TestDataLoggerInitialization:
         the system has a local storage ready to persist passenger
         events and diagnostic logs without requiring manual setup
         """
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         assert os.path.exists(logger.db_path)
 
@@ -53,7 +55,7 @@ class TestDataLoggerInitialization:
         alighting events without any additional setup
         """
         import sqlite3
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         conn = sqlite3.connect(logger.db_path)
         cursor = conn.cursor()
@@ -72,7 +74,7 @@ class TestDataLoggerInitialization:
         and performance metrics from the System Monitor Component
         """
         import sqlite3
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         conn = sqlite3.connect(logger.db_path)
         cursor = conn.cursor()
@@ -91,7 +93,7 @@ class TestDataLoggerInitialization:
         operational and ready to persist passenger events
         """
         import logging
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         with caplog.at_level(logging.INFO):
             logger.initialize()
         assert "SQLite database connected successfully" in caplog.text
@@ -105,16 +107,14 @@ class TestEventLogging:
         successfully written to SQLite so the system knows the event
         has been persisted and will not be lost
         """
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
-
         event_data = {
             "direction": "boarding",
             "passenger_count": 5,
             "available_seats": 15,
             "stop_location": "Western Gate"
         }
-
         result = logger.log_event(event_data)
         assert result == True
 
@@ -125,7 +125,7 @@ class TestEventLogging:
         accurate passenger flow analysis
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         event_data = {
             "direction": "boarding",
@@ -148,7 +148,7 @@ class TestEventLogging:
         demand forecasting
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         event_data = {
             "direction": "boarding",
@@ -171,7 +171,7 @@ class TestEventLogging:
         based shuttle service planning
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         event_data = {
             "direction": "boarding",
@@ -194,7 +194,7 @@ class TestEventLogging:
         demand for route optimization
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         event_data = {
             "direction": "boarding",
@@ -217,7 +217,7 @@ class TestEventLogging:
         and optimize shuttle scheduling
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         event_data = {
             "direction": "boarding",
@@ -240,7 +240,7 @@ class TestEventLogging:
         persisted successfully
         """
         import logging
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         event_data = {
             "direction": "boarding",
@@ -261,16 +261,14 @@ class TestDiagnosticLogging:
         is successfully written to SQLite so the System Monitor knows
         performance metrics have been persisted for analysis
         """
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
-
         diagnostic_data = {
             "log_type": "info",
             "camera_status": "ok",
             "fps": 28.5,
             "latency_ms": 35.2
         }
-
         result = logger.log_diagnostic(diagnostic_data)
         assert result == True
 
@@ -281,7 +279,7 @@ class TestDiagnosticLogging:
         info messages separately for efficient troubleshooting
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         diagnostic_data = {
             "log_type": "info",
@@ -304,7 +302,7 @@ class TestDiagnosticLogging:
         identify recurring hardware issues
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         diagnostic_data = {
             "log_type": "info",
@@ -327,7 +325,7 @@ class TestDiagnosticLogging:
         performance degradation trends
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         diagnostic_data = {
             "log_type": "info",
@@ -350,7 +348,7 @@ class TestDiagnosticLogging:
         per frame as required by NFR-CM-1.4
         """
         import sqlite3 as sql
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         diagnostic_data = {
             "log_type": "info",
@@ -373,7 +371,7 @@ class TestDiagnosticLogging:
         persisted successfully
         """
         import logging
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         diagnostic_data = {
             "log_type": "info",
@@ -395,7 +393,7 @@ class TestStorageMonitoring:
         administrators before the database runs out of space
         """
         import logging
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         with caplog.at_level(logging.WARNING):
             logger.monitor_storage(available_gb=0.5)
@@ -407,7 +405,7 @@ class TestStorageMonitoring:
         Flask Dashboard can display current storage status to system
         administrators for proactive maintenance
         """
-        logger = DataLogger(shuttle_id="shuttle_001")
+        logger = DataLogger(shuttle_id="shuttle_001", db_path=TEST_DB)
         logger.initialize()
         result = logger.monitor_storage(available_gb=10.0)
         assert result is not None

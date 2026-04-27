@@ -7,9 +7,9 @@ logger = logging.getLogger(__name__)
 
 class DataLogger:
 
-    def __init__(self, shuttle_id):
+    def __init__(self, shuttle_id, db_path=None):
         self.shuttle_id = shuttle_id
-        self.db_path = "local_database/apcoms.db"
+        self.db_path = db_path or "local_database/apcoms.db"
 
     def initialize(self):
         """
@@ -133,7 +133,12 @@ class DataLogger:
 
         if available_gb is None:
             import shutil
-            total, used, free = shutil.disk_usage("/")
+            import platform
+            if platform.system() == "Windows":
+                path = "C:\\"
+            else:
+                path = "/"
+            total, used, free = shutil.disk_usage(path)
             available_gb = free / (1024 ** 3)
 
         if available_gb < minimum_threshold_gb:
