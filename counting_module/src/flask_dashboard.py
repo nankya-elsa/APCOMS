@@ -7,7 +7,9 @@ logger = logging.getLogger(__name__)
 class FlaskDashboard:
 
     def __init__(self):
-        self.app = Flask(__name__)
+        # explicitly tell Flask where templates are
+        template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+        self.app = Flask(__name__, template_folder=template_dir)
         self.session_timeout = 30
         self.failed_login_attempts = 0
         self.account_locked = False
