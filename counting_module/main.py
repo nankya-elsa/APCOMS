@@ -3,6 +3,7 @@ import os
 import cv2
 import time
 import logging
+import sqlite3
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
@@ -146,6 +147,16 @@ def main():
 
             # get system status for display
             status = system_monitor.get_system_status()
+
+            # save system status to SQLite for dashboard
+            conn = sqlite3.connect('local_database/apcoms.db')
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('system_status', ?)", (status["system_status"],))
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('camera_status', ?)", (status["camera_status"],))
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_fps', ?)", (str(round(fps, 2)),))
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_latency', ?)", (str(round(latency_ms, 2)),))
+            conn.commit()
+            conn.close()
 
             # update OLED display
             display.show(occupancy, system_status=status["system_status"])

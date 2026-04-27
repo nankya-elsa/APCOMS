@@ -71,9 +71,9 @@ class FlaskDashboard:
 
     def render_dashboard(self):
         """
-        Retrieves current occupancy data, system status and recent
-        diagnostic logs from SQLite and returns them as a dictionary
-        for rendering on the monitoring dashboard interface.
+        Retrieves current occupancy data, system status, recent
+        diagnostic logs and today's summary from SQLite and returns
+        them as a dictionary for rendering on the monitoring dashboard.
         """
         import sqlite3
         import datetime
@@ -87,20 +87,51 @@ class FlaskDashboard:
         }
 
         system_status = {
-            "system_status": "Active",
-            "camera_status": "ok",
+            "system_status": "Offline",
+            "camera_status": "unknown",
             "fps": 0.0,
             "latency_ms": 0.0
         }
 
         diagnostic_logs = []
 
+        today_summary = {
+            "boardings": 0,
+            "alightings": 0,
+            "peak_hour": "N/A",
+            "most_active_stop": "N/A"
+        }
+
         try:
             conn = sqlite3.connect("local_database/apcoms.db")
             cursor = conn.cursor()
+
+            # read system status from system_state
+            cursor.execute("SELECT value FROM system_state WHERE key='system_status'")
+            row = cursor.fetchone()
+            if row:
+                system_status["system_status"] = row[0]
+
+            cursor.execute("SELECT value FROM system_state WHERE key='camera_status'")
+            row = cursor.fetchone()
+            if row:
+                system_status["camera_status"] = row[0]
+
+            cursor.execute("SELECT value FROM system_state WHERE key='current_fps'")
+            row = cursor.fetchone()
+            if row:
+                system_status["fps"] = float(row[0])
+
+            cursor.execute("SELECT value FROM system_state WHERE key='current_latency'")
+            row = cursor.fetchone()
+            if row:
+                system_status["latency_ms"] = float(row[0])
+
+            # read diagnostic logs
             cursor.execute("""
                 SELECT timestamp, log_type, message, camera_status, fps, latency_ms
                 FROM diagnostic_log
+                WHERE message != '' AND message IS NOT NULL
                 ORDER BY log_id DESC LIMIT 10
             """)
             rows = cursor.fetchall()
@@ -113,14 +144,50 @@ class FlaskDashboard:
                     "fps": row[4],
                     "latency_ms": row[5]
                 })
+
+            # today's summary
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM passenger_events
+                WHERE direction = 'boarding' AND timestamp >= ?
+            """, (today,))
+            today_summary["boardings"] = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM passenger_events
+                WHERE direction = 'alighting' AND timestamp >= ?
+            """, (today,))
+            today_summary["alightings"] = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction = 'boarding' AND timestamp >= ?
+                GROUP BY hour ORDER BY count DESC LIMIT 1
+            """, (today,))
+            peak_row = cursor.fetchone()
+            today_summary["peak_hour"] = f"{peak_row[0]}:00" if peak_row else "N/A"
+
+            cursor.execute("""
+                SELECT stop_location, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction = 'boarding' AND timestamp >= ?
+                GROUP BY stop_location ORDER BY count DESC LIMIT 1
+            """, (today,))
+            stop_row = cursor.fetchone()
+            today_summary["most_active_stop"] = stop_row[0] if stop_row else "N/A"
+
             conn.close()
+
         except Exception:
             pass
 
         return {
             "occupancy": occupancy,
             "system_status": system_status,
-            "diagnostic_logs": diagnostic_logs
+            "diagnostic_logs": diagnostic_logs,
+            "today_summary": today_summary
         }
 
     def generate_analytics(self):
