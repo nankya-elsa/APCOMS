@@ -23,14 +23,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     final scheme = Theme.of(context).colorScheme;
-    final background = Color.alphaBlend(
-      scheme.primaryContainer.withValues(alpha: 0.14),
-      Colors.white,
-    );
-    final bottomNavBg = Color.alphaBlend(
-      scheme.primaryContainer.withValues(alpha: 0.28),
-      Colors.white,
-    );
+    const background = Colors.white;
+    const bottomNavBg = Colors.white;
 
     return Scaffold(
       backgroundColor: background,
