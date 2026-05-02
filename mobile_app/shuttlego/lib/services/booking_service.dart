@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:firebase_database/firebase_database.dart';
 
 import '../models/booking_availability.dart';
+import '../models/booking_record.dart';
 import '../models/booking_receipt.dart';
 
 class BookingException implements Exception {
@@ -21,19 +23,100 @@ class BookingService {
   final FirebaseDatabase _database;
 
   Stream<BookingAvailability> watchAvailability({required String shuttleKey}) {
-    final ref = _database.ref().child('shuttles').child(shuttleKey);
+    final controller = StreamController<BookingAvailability>();
+    final shuttleRef = _database.ref().child('shuttles').child(shuttleKey);
+    final bookingsRef = _database.ref().child('bookings');
+
+    Map<String, Object?> shuttleData = const <String, Object?>{};
+    var activeReservations = 0;
+    var hasShuttleData = false;
+
+    void emitIfReady() {
+      if (!hasShuttleData || controller.isClosed) return;
+
+      controller.add(
+        BookingAvailability(
+          reportedAvailableSeats: _readInt(shuttleData['available_seats']),
+          occupiedSeats: _readInt(shuttleData['current_count']),
+          reservedSeats: activeReservations,
+        ),
+      );
+    }
+
+    final shuttleSub = shuttleRef.onValue.listen(
+      (event) {
+        final raw = event.snapshot.value;
+        shuttleData = raw is Map
+            ? Map<String, Object?>.from(raw)
+            : const <String, Object?>{};
+        hasShuttleData = true;
+        emitIfReady();
+      },
+      onError: controller.addError,
+    );
+
+    final bookingsSub = bookingsRef
+        .orderByChild('shuttle_key')
+        .equalTo(shuttleKey)
+        .onValue
+        .listen(
+          (event) {
+            activeReservations = _countActiveReservations(event.snapshot.value);
+            emitIfReady();
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            // Keep shuttle availability visible even if booking reads are
+            // temporarily blocked. Creating/cancelling still reports its own
+            // database errors when the user acts.
+            activeReservations = 0;
+            emitIfReady();
+          },
+        );
+
+    controller.onCancel = () async {
+      await shuttleSub.cancel();
+      await bookingsSub.cancel();
+    };
+
+    return controller.stream;
+  }
+
+  static int _countActiveReservations(Object? raw) {
+    if (raw is! Map) return 0;
+
+    var count = 0;
+    for (final value in raw.values) {
+      if (value is! Map) continue;
+      final map = Map<String, Object?>.from(value);
+      final status = ((map['status'] as String?) ?? '').trim().toLowerCase();
+      if (status == 'reserved') count++;
+    }
+
+    return count;
+  }
+
+  Stream<List<BookingRecord>> watchUserBookings({required String userUid}) {
+    final ref = _database.ref().child('user_bookings').child(userUid);
 
     return ref.onValue.map((event) {
       final raw = event.snapshot.value;
-      final data = raw is Map ? Map<String, Object?>.from(raw) : const {};
+      if (raw is! Map) return const <BookingRecord>[];
 
-      final freeSeats = _readInt(data['available_seats']);
-      final occupiedSeats = _readInt(data['current_count']);
+      final bookings = <BookingRecord>[];
+      for (final entry in raw.entries) {
+        final value = entry.value;
+        if (value is! Map) continue;
 
-      return BookingAvailability(
-        freeSeats: freeSeats,
-        occupiedSeats: occupiedSeats,
-      );
+        final map = Map<String, Object?>.from(value);
+        map.putIfAbsent('booking_id', () => entry.key.toString());
+        final booking = BookingRecord.fromMap(map);
+        if (booking != null) {
+          bookings.add(booking);
+        }
+      }
+
+      bookings.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
+      return bookings;
     });
   }
 
@@ -52,16 +135,15 @@ class BookingService {
       throw BookingException('Failed to allocate a booking id.');
     }
 
-    // Clients are not allowed to update seat counts.
-    // We only do a best-effort check here; the authoritative seat count should
-    // be updated by a trusted system (driver/admin/backend simulation).
     final shuttleSnapshot = await shuttleRef.get();
     final shuttleRaw = shuttleSnapshot.value;
     final shuttleData = shuttleRaw is Map
         ? Map<String, Object?>.from(shuttleRaw)
         : const <String, Object?>{};
-    final freeSeats = _readInt(shuttleData['available_seats']);
-    if (freeSeats <= 0) {
+    final cameraAvailableSeats = _readInt(shuttleData['available_seats']);
+    final reservedSeats = await _fetchActiveReservationCount(shuttleKey);
+    final bookableSeats = cameraAvailableSeats - reservedSeats;
+    if (bookableSeats <= 0) {
       throw BookingException('No free seats available for this shuttle.');
     }
 
@@ -74,7 +156,7 @@ class BookingService {
       'destinationIndex': destinationIndex,
     });
 
-    await bookingsRef.child(bookingKey).set(<String, Object?>{
+    final bookingData = <String, Object?>{
       'booking_id': bookingKey,
       'shuttle_key': shuttleKey,
       'user_uid': userUid,
@@ -85,6 +167,11 @@ class BookingService {
       'status': 'reserved',
       'qr_payload': qrPayload,
       'created_at': ServerValue.timestamp,
+    };
+
+    await _database.ref().update(<String, Object?>{
+      'bookings/$bookingKey': bookingData,
+      'user_bookings/$userUid/$bookingKey': bookingData,
     });
 
     return BookingReceipt(
@@ -98,6 +185,38 @@ class BookingService {
       createdAt: null,
       qrPayload: qrPayload,
     );
+  }
+
+  Future<void> cancelBooking({
+    required BookingRecord booking,
+    required String reason,
+  }) async {
+    if (!booking.isActive) {
+      throw BookingException('Only active reservations can be cancelled.');
+    }
+
+    await _database.ref().update(<String, Object?>{
+      'bookings/${booking.bookingId}/status': 'cancelled',
+      'bookings/${booking.bookingId}/cancel_reason': reason.trim(),
+      'bookings/${booking.bookingId}/cancelled_at': ServerValue.timestamp,
+      'user_bookings/${booking.userUid}/${booking.bookingId}/status':
+          'cancelled',
+      'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason':
+          reason.trim(),
+      'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at':
+          ServerValue.timestamp,
+    });
+  }
+
+  Future<int> _fetchActiveReservationCount(String shuttleKey) async {
+    final snapshot = await _database
+        .ref()
+        .child('bookings')
+        .orderByChild('shuttle_key')
+        .equalTo(shuttleKey)
+        .get();
+
+    return _countActiveReservations(snapshot.value);
   }
 
   static int _readInt(Object? value) {

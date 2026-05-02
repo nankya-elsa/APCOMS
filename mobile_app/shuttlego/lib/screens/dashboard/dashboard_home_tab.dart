@@ -2,8 +2,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 
+import '../../models/booking_availability.dart';
 import '../../models/user_profile.dart';
 import '../../services/auth_service.dart';
+import '../../services/booking_service.dart';
 import '../booking_screen.dart';
 
 class DashboardHomeTab extends StatelessWidget {
@@ -162,9 +164,14 @@ class _ShuttleCard extends StatelessWidget {
         .child('shuttles')
         .child(trackedShuttleKey);
 
-    return StreamBuilder<DatabaseEvent>(
-      stream: ref.onValue,
-      builder: (context, snapshot) {
+    return StreamBuilder<BookingAvailability>(
+      stream: BookingService().watchAvailability(shuttleKey: trackedShuttleKey),
+      builder: (context, availabilitySnapshot) {
+        final availability = availabilitySnapshot.data;
+
+        return StreamBuilder<DatabaseEvent>(
+          stream: ref.onValue,
+          builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return _cardShell(context, child: const _CardLoading());
         }
@@ -197,9 +204,12 @@ class _ShuttleCard extends StatelessWidget {
             ? Map<String, Object?>.from(locationRaw)
             : null;
 
-        final availableSeats = _readInt(data['available_seats']);
+        final rawAvailableSeats = _readInt(data['available_seats']);
         final occupiedSeats = _readInt(data['current_count']);
-        final totalSeats = (availableSeats + occupiedSeats);
+        final reservedSeats = availability?.reservedSeats ?? 0;
+        final availableSeats = (rawAvailableSeats - reservedSeats)
+            .clamp(0, 999)
+            .toInt();
         final occupancyStatus = (data['occupancy_status'] as String?)?.trim();
 
         final currentStop =
@@ -218,7 +228,6 @@ class _ShuttleCard extends StatelessWidget {
 
         final isFull =
             availableSeats <= 0 ||
-            (totalSeats > 0 && occupiedSeats >= totalSeats) ||
             hasHardFullStatus;
 
         final freeBg = Color.alphaBlend(
@@ -284,8 +293,8 @@ class _ShuttleCard extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: _StatBox(
-                      value: totalSeats,
-                      label: 'Total',
+                      value: reservedSeats,
+                      label: 'Reserved',
                       background: scheme.surface,
                       foreground: scheme.onSurface,
                       borderColor: scheme.outlineVariant,
@@ -351,6 +360,8 @@ class _ShuttleCard extends StatelessWidget {
               ),
             ],
           ),
+        );
+          },
         );
       },
     );

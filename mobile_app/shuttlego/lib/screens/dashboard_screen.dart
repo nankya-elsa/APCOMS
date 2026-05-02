@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'dashboard/dashboard_home_tab.dart';
 import 'dashboard/dashboard_profile_tab.dart';
+import 'my_bookings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -36,6 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               uid: user.uid,
               trackedShuttleKey: _trackedShuttleKey,
             ),
+            const MyBookingsScreen(),
             const DashboardProfileTab(),
           ],
         ),
@@ -52,6 +54,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: Icon(Icons.home_outlined),
             activeIcon: Icon(Icons.home),
             label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.confirmation_number_outlined),
+            activeIcon: Icon(Icons.confirmation_number),
+            label: 'Bookings',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person_outline),
