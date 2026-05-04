@@ -5,6 +5,8 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+import java.util.Properties
+
 apply(plugin = "com.google.gms.google-services")
 
 android {
@@ -30,6 +32,22 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        fun readLocalProperty(key: String): String? {
+            val localPropsFile = rootProject.file("local.properties")
+            if (!localPropsFile.exists()) return null
+            val props = Properties()
+            localPropsFile.inputStream().use { props.load(it) }
+            return props.getProperty(key)
+        }
+
+        val googleMapsApiKey =
+            (project.findProperty("GOOGLE_MAPS_API_KEY") as String?)
+                ?: System.getenv("GOOGLE_MAPS_API_KEY_ANDROID")
+                ?: System.getenv("GOOGLE_MAPS_API_KEY")
+                ?: readLocalProperty("GOOGLE_MAPS_API_KEY")
+                ?: ""
+        manifestPlaceholders["googleMapsApiKey"] = googleMapsApiKey
     }
 
     buildTypes {

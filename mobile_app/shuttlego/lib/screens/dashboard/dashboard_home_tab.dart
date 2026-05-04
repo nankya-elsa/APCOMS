@@ -1,11 +1,12 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import '../../models/booking_availability.dart';
 import '../../models/user_profile.dart';
 import '../../services/auth_service.dart';
+import '../../services/booking_service.dart';
+import '../booking_screen.dart';
 
 class DashboardHomeTab extends StatelessWidget {
   const DashboardHomeTab({
@@ -67,13 +68,13 @@ class DashboardHomeTab extends StatelessWidget {
             _ShuttleCard(trackedShuttleKey: trackedShuttleKey),
             const SizedBox(height: 14),
             Text(
-              'Live location',
+              'Booking',
               style: Theme.of(
                 context,
               ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            _LiveLocationMap(trackedShuttleKey: trackedShuttleKey),
+            _BookingEntryCard(trackedShuttleKey: trackedShuttleKey),
           ],
         );
       },
@@ -163,24 +164,71 @@ class _ShuttleCard extends StatelessWidget {
         .child('shuttles')
         .child(trackedShuttleKey);
 
-    return StreamBuilder<DatabaseEvent>(
-      stream: ref.onValue,
-      builder: (context, snapshot) {
+    return StreamBuilder<BookingAvailability>(
+      stream: BookingService().watchAvailability(shuttleKey: trackedShuttleKey),
+      builder: (context, availabilitySnapshot) {
+        final availability = availabilitySnapshot.data;
+
+        return StreamBuilder<DatabaseEvent>(
+          stream: ref.onValue,
+          builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return _cardShell(context, child: const _CardLoading());
         }
 
+        if (snapshot.hasError) {
+          return _cardShell(
+            context,
+            child: Text(
+              'Failed to load shuttle data.\n${snapshot.error}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          );
+        }
+
         final raw = snapshot.data?.snapshot.value;
+        if (raw == null) {
+          return _cardShell(
+            context,
+            child: Text(
+              'No data found at shuttles/$trackedShuttleKey.\n'
+              'Check your Realtime Database path and rules.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          );
+        }
         final data = raw is Map ? Map<String, Object?>.from(raw) : const {};
 
-        final availableSeats = _readInt(data['available_seats']);
+        final locationRaw = data['location'];
+        final location = locationRaw is Map
+            ? Map<String, Object?>.from(locationRaw)
+            : null;
+
+        final rawAvailableSeats = _readInt(data['available_seats']);
         final occupiedSeats = _readInt(data['current_count']);
-        final totalSeats = (availableSeats + occupiedSeats);
+        final reservedSeats = availability?.reservedSeats ?? 0;
+        final availableSeats = (rawAvailableSeats - reservedSeats)
+            .clamp(0, 999)
+            .toInt();
         final occupancyStatus = (data['occupancy_status'] as String?)?.trim();
+
+        final currentStop =
+            (((data['current_stop'] as String?) ??
+                        (location?['current_stop'] as String?)) ??
+                    '')
+                .trim();
+        final nextStop =
+            (((data['next_stop'] as String?) ??
+                        (location?['next_stop'] as String?)) ??
+                    '')
+                .trim();
+
+        final normalizedStatus = (occupancyStatus ?? '').toLowerCase();
+        final hasHardFullStatus = normalizedStatus == 'full';
 
         final isFull =
             availableSeats <= 0 ||
-            (occupancyStatus ?? '').toLowerCase().contains('full');
+            hasHardFullStatus;
 
         final freeBg = Color.alphaBlend(
           scheme.primaryContainer.withValues(alpha: 0.55),
@@ -245,8 +293,8 @@ class _ShuttleCard extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: _StatBox(
-                      value: totalSeats,
-                      label: 'Total',
+                      value: reservedSeats,
+                      label: 'Reserved',
                       background: scheme.surface,
                       foreground: scheme.onSurface,
                       borderColor: scheme.outlineVariant,
@@ -266,10 +314,15 @@ class _ShuttleCard extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Text(
-                    'Next stop: Library',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
+                  Flexible(
+                    child: Text(
+                      'Current: ${currentStop.isEmpty ? '—' : currentStop}  •  Next: ${nextStop.isEmpty ? '—' : nextStop}',
+                      textAlign: TextAlign.right,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
@@ -307,6 +360,8 @@ class _ShuttleCard extends StatelessWidget {
               ),
             ],
           ),
+        );
+          },
         );
       },
     );
@@ -404,82 +459,91 @@ class _CardLoading extends StatelessWidget {
   }
 }
 
-class _LiveLocationMap extends StatelessWidget {
-  const _LiveLocationMap({required this.trackedShuttleKey});
+class _BookingEntryCard extends StatelessWidget {
+  const _BookingEntryCard({required this.trackedShuttleKey});
 
   final String trackedShuttleKey;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final ref = FirebaseDatabase.instance
-        .ref()
-        .child('shuttles')
-        .child(trackedShuttleKey);
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        height: 210,
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.22),
-          ),
-          borderRadius: BorderRadius.circular(16),
+    void goToBooking() {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => BookingScreen(trackedShuttleKey: trackedShuttleKey),
         ),
-        child: kIsWeb
-            ? Center(
-                child: Text(
-                  'Map preview on web requires a Google Maps JS API key.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              )
-            : StreamBuilder<DatabaseEvent>(
-                stream: ref.onValue,
-                builder: (context, snapshot) {
-                  final raw = snapshot.data?.snapshot.value;
-                  final data = raw is Map
-                      ? Map<String, Object?>.from(raw)
-                      : const {};
+      );
+    }
 
-                  final lat =
-                      _readDouble(data['lat']) ??
-                      _readDouble(data['latitude']) ??
-                      0.0;
-                  final lng =
-                      _readDouble(data['lng']) ??
-                      _readDouble(data['longitude']) ??
-                      0.0;
-
-                  final position = LatLng(lat, lng);
-                  final marker = Marker(
-                    markerId: const MarkerId('shuttle'),
-                    position: position,
-                  );
-
-                  return GoogleMap(
-                    initialCameraPosition: CameraPosition(
-                      target: position,
-                      zoom: lat == 0.0 && lng == 0.0 ? 2 : 15,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: goToBooking,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Color.alphaBlend(
+              scheme.primaryContainer.withValues(alpha: 0.12),
+              Colors.white,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.22),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Color.alphaBlend(
+                        scheme.primaryContainer.withValues(alpha: 0.55),
+                        Colors.white,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    markers: {marker},
-                    myLocationButtonEnabled: false,
-                    zoomControlsEnabled: false,
-                  );
-                },
+                    child: Icon(Icons.event_seat, color: scheme.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Book a seat',
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Choose pick up and destination',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: FilledButton(
+                  onPressed: goToBooking,
+                  child: const Text('Book Now'),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
-  }
-
-  static double? _readDouble(Object? value) {
-    if (value is double) return value;
-    if (value is int) return value.toDouble();
-    if (value is String) return double.tryParse(value);
-    return null;
   }
 }

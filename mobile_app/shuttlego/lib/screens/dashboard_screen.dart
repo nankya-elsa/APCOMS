@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'dashboard/dashboard_home_tab.dart';
 import 'dashboard/dashboard_profile_tab.dart';
+import 'my_bookings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -23,14 +24,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     final scheme = Theme.of(context).colorScheme;
-    final background = Color.alphaBlend(
-      scheme.primaryContainer.withValues(alpha: 0.14),
-      Colors.white,
-    );
-    final bottomNavBg = Color.alphaBlend(
-      scheme.primaryContainer.withValues(alpha: 0.28),
-      Colors.white,
-    );
+    const background = Colors.white;
+    const bottomNavBg = Colors.white;
 
     return Scaffold(
       backgroundColor: background,
@@ -42,6 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               uid: user.uid,
               trackedShuttleKey: _trackedShuttleKey,
             ),
+            const MyBookingsScreen(),
             const DashboardProfileTab(),
           ],
         ),
@@ -58,6 +54,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: Icon(Icons.home_outlined),
             activeIcon: Icon(Icons.home),
             label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.confirmation_number_outlined),
+            activeIcon: Icon(Icons.confirmation_number),
+            label: 'Bookings',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person_outline),
