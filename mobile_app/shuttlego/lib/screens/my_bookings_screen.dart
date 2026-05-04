@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../models/booking_receipt.dart';
@@ -32,87 +34,118 @@ class MyBookingsScreen extends StatefulWidget {
 
 class _MyBookingsScreenState extends State<MyBookingsScreen> {
   late final BookingService _service = widget.service ?? BookingService();
+  Stream<List<BookingRecord>>? _bookingsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    // Stream will be created lazily and reused by the StreamBuilder.
+  }
+
+  // Removed temporary one-shot debug and debug listener.
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    final scheme = Theme.of(context).colorScheme;
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final scheme = Theme.of(context).colorScheme;
 
-    if (user == null) {
-      return const Center(child: Text('Please sign in to view bookings.'));
-    }
+      if (user == null) {
+        return const Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(child: Text('Please sign in to view bookings.')),
+        );
+      }
 
-    return ColoredBox(
-      color: Colors.white,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Text(
-              'My Bookings',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: scheme.onSurface,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
+      return Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          title: const Text('My Bookings'),
+          backgroundColor: Colors.white,
+          foregroundColor: scheme.onSurface,
+          elevation: 0,
+          surfaceTintColor: Colors.white,
+        ),
+        body: StreamBuilder<List<BookingRecord>>(
+          stream: _bookingsStream ??= _service.watchUserBookings(
+            userUid: user.uid,
           ),
-          Expanded(
-            child: StreamBuilder<List<BookingRecord>>(
-              stream: _service.watchUserBookings(userUid: user.uid),
-              builder: (context, snapshot) {
-                final bookings = snapshot.data ?? const <BookingRecord>[];
+          initialData: const <BookingRecord>[],
+          builder: (context, snapshot) {
+            final bookings = snapshot.data ?? const <BookingRecord>[];
 
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                bookings.isEmpty) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
-                if (snapshot.hasError) {
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      'Could not load bookings.\n${snapshot.error}',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  );
-                }
+            if (snapshot.hasError) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Could not load bookings.\n${snapshot.error}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              );
+            }
 
-                if (bookings.isEmpty) {
-                  return _BookingsEmptyState(uid: user.uid);
-                }
+            if (bookings.isEmpty) return _BookingsEmptyState(uid: user.uid);
 
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  itemCount: bookings.length,
-                  separatorBuilder: (context, index) =>
-                      const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final booking = bookings[index];
-                    return _BookingTile(
-                      booking: booking,
-                      onOpen: () => _openDetails(booking),
-                      onShowQr: () => _showQr(booking),
-                      onCancel: booking.isActive
-                          ? () => _cancelBooking(booking)
-                          : null,
-                    );
-                  },
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              itemCount: bookings.length,
+              separatorBuilder: (context, index) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final booking = bookings[index];
+                return _BookingTile(
+                  booking: booking,
+                  onOpen: () => _openDetails(booking),
+                  onShowQr: () => _showQr(booking),
+                  onCancel:
+                      booking.isActive ? () => _cancelBooking(booking) : null,
                 );
               },
+            );
+          },
+        ),
+      );
+    } catch (e, st) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                const SizedBox(height: 12),
+                Text(
+                  'An error occurred while rendering My Bookings:',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  e.toString(),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.red),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(st.toString()),
+              ],
             ),
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
   }
 
   Future<void> _openDetails(BookingRecord booking) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => BookingDetailsScreen(
-          booking: booking,
-          service: _service,
-        ),
+        builder: (context) =>
+            BookingDetailsScreen(booking: booking, service: _service),
       ),
     );
   }
@@ -120,9 +153,8 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
   void _showQr(BookingRecord booking) {
     showDialog<void>(
       context: context,
-      builder: (context) => _BookingQrDialog(
-        receipt: _receiptFromBooking(booking),
-      ),
+      builder: (context) =>
+          _BookingQrDialog(receipt: _receiptFromBooking(booking)),
     );
   }
 
@@ -149,6 +181,11 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
 }
 
 class _BookingsEmptyState extends StatelessWidget {
@@ -173,25 +210,25 @@ class _BookingsEmptyState extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               'No bookings found',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
               'This page shows bookings where user_uid matches your signed-in account.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 10),
             SelectableText(
               'Current uid: $uid',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -239,7 +276,7 @@ class _BookingTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '${booking.pickupStop} to ${booking.destinationStop}',
+                      '${booking.pickupStop} → ${booking.destinationStop}',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -265,31 +302,18 @@ class _BookingTile extends StatelessWidget {
                 'Ticket: ${booking.bookingId}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
-              if ((booking.cancelReason ?? '').isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  'Reason: ${booking.cancelReason}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: onShowQr,
-                    icon: const Icon(Icons.qr_code_2, size: 18),
-                    label: const Text('QR'),
-                  ),
-                  const Spacer(),
-                  if (onCancel != null)
-                    TextButton(onPressed: onCancel, child: const Text('Cancel')),
-                ],
+              const SizedBox(height: 6),
+              Text(
+                'Shuttle: ${booking.shuttleKey} • Pickup #${booking.pickupIndex} • Destination #${booking.destinationIndex}',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
               ),
             ],
           ),
@@ -320,93 +344,136 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final receipt = _receiptFromBooking(booking);
-    final statusColor = booking.isActive ? scheme.primary : scheme.error;
+    try {
+      final scheme = Theme.of(context).colorScheme;
+      final receipt = _receiptFromBooking(booking);
+      final statusColor = booking.isActive ? scheme.primary : scheme.error;
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text('Booking Details'),
+      return Scaffold(
         backgroundColor: Colors.white,
-        foregroundColor: scheme.onSurface,
-        elevation: 0,
-        surfaceTintColor: Colors.white,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.4),
+        appBar: AppBar(
+          title: const Text('Booking Details'),
+          backgroundColor: Colors.white,
+          foregroundColor: scheme.onSurface,
+          elevation: 0,
+          surfaceTintColor: Colors.white,
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.4),
+                ),
+              ),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 230,
+                    width: 230,
+                    child: QrImageView(
+                      data: receipt.qrPayload,
+                      version: QrVersions.auto,
+                      gapless: false,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Show this QR code when boarding.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showQr(receipt),
+                      icon: const Icon(Icons.download),
+                      label: const Text('View or Download Ticket'),
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: Column(
-              children: [
-                SizedBox(
-                  height: 230,
-                  width: 230,
-                  child: QrImageView(
-                    data: receipt.qrPayload,
-                    version: QrVersions.auto,
-                    gapless: false,
+            const SizedBox(height: 14),
+            _DetailRow(
+              label: 'Status',
+              value: booking.status,
+              color: statusColor,
+            ),
+            _DetailRow(label: 'Pickup', value: booking.pickupStop),
+            _DetailRow(label: 'Destination', value: booking.destinationStop),
+            _DetailRow(label: 'Shuttle', value: booking.shuttleKey),
+            _DetailRow(label: 'Ticket ID', value: booking.bookingId),
+            if ((booking.cancelReason ?? '').isNotEmpty)
+              _DetailRow(
+                label: 'Cancel reason',
+                value: booking.cancelReason ?? '',
+              ),
+            const SizedBox(height: 16),
+            if (booking.isActive)
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: FilledButton(
+                  onPressed: _isCancelling ? null : _cancelBooking,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: scheme.error,
+                    foregroundColor: scheme.onError,
                   ),
+                  child: _isCancelling
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Cancel Reservation'),
                 ),
+              ),
+          ],
+        ),
+      );
+    } catch (e, st) {
+      // Show the error so it's visible in the UI instead of crashing to white screen
+      debugPrint('BookingDetails build error: $e\n$st');
+      return Scaffold(
+        appBar: AppBar(title: const Text('Booking Details')),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
                 const SizedBox(height: 12),
                 Text(
-                  'Show this QR code when boarding.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
+                  'An error occurred while rendering booking details:',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _showQr(receipt),
-                    icon: const Icon(Icons.download),
-                    label: const Text('View or Download Ticket'),
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  e.toString(),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.red),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  st.toString(),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 14),
-          _DetailRow(label: 'Status', value: booking.status, color: statusColor),
-          _DetailRow(label: 'Pickup', value: booking.pickupStop),
-          _DetailRow(label: 'Destination', value: booking.destinationStop),
-          _DetailRow(label: 'Shuttle', value: booking.shuttleKey),
-          _DetailRow(label: 'Ticket ID', value: booking.bookingId),
-          if ((booking.cancelReason ?? '').isNotEmpty)
-            _DetailRow(label: 'Cancel reason', value: booking.cancelReason!),
-          const SizedBox(height: 16),
-          if (booking.isActive)
-            SizedBox(
-              width: double.infinity,
-              height: 46,
-              child: FilledButton(
-                onPressed: _isCancelling ? null : _cancelBooking,
-                style: FilledButton.styleFrom(
-                  backgroundColor: scheme.error,
-                  foregroundColor: scheme.onError,
-                ),
-                child: _isCancelling
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Cancel Reservation'),
-              ),
-            ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
   }
 
   void _showQr(BookingReceipt receipt) {
@@ -462,9 +529,9 @@ class _DetailRow extends StatelessWidget {
             width: 104,
             child: Text(
               label,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           Expanded(
@@ -511,9 +578,9 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
           children: [
             Text(
               'Cancel booking',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(

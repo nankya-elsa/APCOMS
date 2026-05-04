@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class BookingRecord {
   const BookingRecord({
     required this.bookingId,
@@ -36,7 +38,19 @@ class BookingRecord {
     final pickupStop = (map['pickup_stop'] as String?)?.trim();
     final destinationStop = (map['destination_stop'] as String?)?.trim();
     final status = ((map['status'] as String?) ?? 'reserved').trim();
-    final qrPayload = (map['qr_payload'] as String?)?.trim();
+    final rawQr = map['qr_payload'];
+    String? qrPayload;
+    if (rawQr is String) {
+      qrPayload = rawQr.trim();
+    } else if (rawQr is Map) {
+      try {
+        qrPayload = jsonEncode(rawQr);
+      } catch (_) {
+        qrPayload = rawQr.toString();
+      }
+    } else if (rawQr != null) {
+      qrPayload = rawQr.toString();
+    }
 
     final pickupIndex = _readInt(map['pickup_index']);
     final destinationIndex = _readInt(map['destination_index']);

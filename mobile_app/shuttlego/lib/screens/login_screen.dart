@@ -92,7 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
         'configuration-not-found' =>
           'Firebase Authentication is not set up for this project. In Firebase Console → Authentication, click Get started and enable Email/Password.',
         _ =>
-          (error.message == null || error.message!.trim().isEmpty)
+          ((error.message?.trim().isEmpty) ?? true)
               ? 'Login failed ($code).'
               : 'Login failed ($code). ${error.message}',
       };

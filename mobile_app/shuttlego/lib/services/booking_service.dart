@@ -1,6 +1,7 @@
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:firebase_database/firebase_database.dart';
 
 import '../models/booking_availability.dart';
@@ -43,17 +44,14 @@ class BookingService {
       );
     }
 
-    final shuttleSub = shuttleRef.onValue.listen(
-      (event) {
-        final raw = event.snapshot.value;
-        shuttleData = raw is Map
-            ? Map<String, Object?>.from(raw)
-            : const <String, Object?>{};
-        hasShuttleData = true;
-        emitIfReady();
-      },
-      onError: controller.addError,
-    );
+    final shuttleSub = shuttleRef.onValue.listen((event) {
+      final raw = event.snapshot.value;
+      shuttleData = raw is Map
+          ? Map<String, Object?>.from(raw)
+          : const <String, Object?>{};
+      hasShuttleData = true;
+      emitIfReady();
+    }, onError: controller.addError);
 
     final bookingsSub = bookingsRef
         .orderByChild('shuttle_key')
@@ -98,12 +96,37 @@ class BookingService {
   Stream<List<BookingRecord>> watchUserBookings({required String userUid}) {
     final ref = _database.ref().child('user_bookings').child(userUid);
 
-    return ref.onValue.map((event) {
+    // Make the controller broadcast-capable so multiple listeners (debug
+    // subscribers + UI) won't compete for a single-subscription stream.
+    final controller = StreamController<List<BookingRecord>>.broadcast();
+    String? lastSnapshotStr;
+
+    final sub = ref.onValue.listen((event) {
       final raw = event.snapshot.value;
-      if (raw is! Map) return const <BookingRecord>[];
+      final snapshotStr = raw?.toString() ?? 'null';
+      // De-duplicate identical consecutive snapshots to avoid rapid rebuilds
+      if (snapshotStr == lastSnapshotStr) return;
+      lastSnapshotStr = snapshotStr;
+
+      // Defensive handling: sometimes snapshots can be List or Map depending
+      // on how data was written. Normalize to a Map<String, Object?>.
+      Map<String, Object?> rawMap;
+      if (raw is Map) {
+        rawMap = Map<String, Object?>.from(raw);
+      } else if (raw is List) {
+        rawMap = <String, Object?>{};
+        for (var i = 0; i < raw.length; i++) {
+          final v = raw[i];
+          if (v != null) rawMap[i.toString()] = v;
+        }
+      } else {
+        controller.add(const <BookingRecord>[]);
+        return;
+      }
 
       final bookings = <BookingRecord>[];
-      for (final entry in raw.entries) {
+      var parseNullCount = 0;
+      for (final entry in rawMap.entries) {
         final value = entry.value;
         if (value is! Map) continue;
 
@@ -112,12 +135,21 @@ class BookingService {
         final booking = BookingRecord.fromMap(map);
         if (booking != null) {
           bookings.add(booking);
+        } else {
+          parseNullCount++;
         }
       }
 
       bookings.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
-      return bookings;
-    });
+      controller.add(bookings);
+    }, onError: controller.addError);
+
+    controller.onCancel = () async {
+      await sub.cancel();
+      await controller.close();
+    };
+
+    return controller.stream;
   }
 
   Future<BookingReceipt> createBooking({

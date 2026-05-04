@@ -155,7 +155,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           error.message ??
               'Account was created, but we could not save your profile. Check Realtime Database rules and try again.',
         _ =>
-          (error.message == null || error.message!.trim().isEmpty)
+          ((error.message?.trim().isEmpty) ?? true)
               ? 'Sign up failed ($code).'
               : 'Sign up failed ($code). ${error.message}',
       };
