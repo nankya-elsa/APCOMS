@@ -7,10 +7,10 @@ logger = logging.getLogger(__name__)
 
 class CountingLogic:
 
-    def __init__(self, total_capacity=None):
+    def __init__(self, total_capacity=None, db_path=None):
         import json
 
-        self.db_path = "local_database/apcoms.db"
+        self.db_path = db_path or "local_database/apcoms.db"
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
         self.counted_tracks = []
