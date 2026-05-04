@@ -44,7 +44,7 @@ def main():
     data_logger.initialize()
 
     # System Monitor
-    system_monitor = SystemMonitor()
+    system_monitor = SystemMonitor(data_logger=data_logger)
     system_monitor.initialize()
 
     # Counting Logic
@@ -112,11 +112,15 @@ def main():
                     "previous_centroid": track.get("previous_centroid", (0, 0)),
                     "current_centroid": track.get("current_centroid", (0, 540))
                 }
-                counting_logic.update_count(track_dict)
 
-                # log boarding/alighting event
-                direction = counting_logic.determine_direction(track_dict)
-                if direction in ["boarding", "alighting"]:
+                # capture count BEFORE update so we can detect if it actually changed
+                count_before = counting_logic.passenger_count
+                counting_logic.update_count(track_dict)
+                count_after = counting_logic.passenger_count
+
+                # only log event if count actually changed (real boarding or alighting)
+                if count_after != count_before:
+                    direction = "boarding" if count_after > count_before else "alighting"
                     occupancy = counting_logic.calculate_occupancy()
                     data_logger.log_event({
                         "direction": direction,
@@ -155,6 +159,9 @@ def main():
             cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('camera_status', ?)", (status["camera_status"],))
             cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_fps', ?)", (str(round(fps, 2)),))
             cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_latency', ?)", (str(round(latency_ms, 2)),))
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_count', ?)", (str(occupancy["passenger_count"]),))
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('available_seats', ?)", (str(occupancy["available_seats"]),))
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_stop', ?)", (occupancy["current_stop"],))
             conn.commit()
             conn.close()
 
@@ -199,6 +206,19 @@ def main():
         camera.stop()
         cv2.destroyAllWindows()
         logger.info("Camera stopped")
+        # advance to next stop so next run starts at the next location
+        counting_logic.advance_stop()
+
+        # write offline status to SQLite so dashboard reflects shutdown
+        conn = sqlite3.connect('local_database/apcoms.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('system_status', 'Offline')")
+        cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('camera_status', 'unknown')")
+        cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_fps', '0')")
+        cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_latency', '0')")
+        conn.commit()
+        conn.close()
+
         logger.info("System shutdown complete")
         logger.info("=" * 60)
 

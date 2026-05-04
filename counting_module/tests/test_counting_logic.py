@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from counting_logic import CountingLogic
 
+TEST_DB = "local_database/test_apcoms.db"
+
 
 class TestCountingLogicInitialization:
 
@@ -15,7 +17,7 @@ class TestCountingLogicInitialization:
         so the system knows the maximum number of passengers the shuttle
         can carry at any given time
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         assert counter.total_capacity == 20
 
     def test_passenger_count_reads_from_sqlite_on_startup(self):
@@ -24,7 +26,7 @@ class TestCountingLogicInitialization:
         SQLite on startup so counting continues from where it left off
         instead of always starting from zero
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.initialize()
         assert counter.passenger_count >= 0
 
@@ -34,7 +36,7 @@ class TestCountingLogicInitialization:
         capacity minus current passenger count on startup so the system
         always shows accurate seat availability
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.initialize()
         assert counter.available_seats == counter.total_capacity - counter.passenger_count
 
@@ -44,7 +46,7 @@ class TestCountingLogicInitialization:
         the system can determine when a passenger is boarding by
         detecting movement through the upper half of the camera frame
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         assert counter.virtual_entry_zone is not None
 
     def test_virtual_exit_zone_is_defined(self):
@@ -53,7 +55,7 @@ class TestCountingLogicInitialization:
         the system can determine when a passenger is alighting by
         detecting movement through the lower half of the camera frame
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         assert counter.virtual_exit_zone is not None
 
     def test_stops_list_is_loaded(self):
@@ -62,7 +64,7 @@ class TestCountingLogicInitialization:
         the system knows all the shuttle stops along the predefined
         campus route for location tracking
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         assert counter.designated_stops_list is not None
         assert len(counter.designated_stops_list) > 0
 
@@ -72,7 +74,7 @@ class TestCountingLogicInitialization:
         the shuttle always begins its route from the first designated
         stop which is the Main Gate
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         assert counter.current_stop_index == 0
 
     def test_reads_total_capacity_from_sqlite_if_available(self):
@@ -82,8 +84,16 @@ class TestCountingLogicInitialization:
         shuttle capacity via Flask Dashboard without changing code
         """
         import sqlite3
-        conn = sqlite3.connect("local_database/apcoms.db")
+        import os
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         cursor.execute("""
             INSERT OR REPLACE INTO system_state (key, value)
             VALUES ('total_capacity', '15')
@@ -91,7 +101,7 @@ class TestCountingLogicInitialization:
         conn.commit()
         conn.close()
 
-        logic = CountingLogic()
+        logic = CountingLogic(db_path=TEST_DB)
         assert logic.total_capacity == 15
 
     def test_reads_stops_from_sqlite_if_available(self):
@@ -102,9 +112,17 @@ class TestCountingLogicInitialization:
         """
         import sqlite3
         import json
+        import os
+        os.makedirs("local_database", exist_ok=True)
         stops = ["Stop A", "Stop B", "Stop C"]
-        conn = sqlite3.connect("local_database/apcoms.db")
+        conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         cursor.execute("""
             INSERT OR REPLACE INTO system_state (key, value)
             VALUES ('designated_stops', ?)
@@ -112,7 +130,7 @@ class TestCountingLogicInitialization:
         conn.commit()
         conn.close()
 
-        logic = CountingLogic()
+        logic = CountingLogic(db_path=TEST_DB)
         assert logic.designated_stops_list == stops
 
     def test_falls_back_to_default_capacity_if_not_in_sqlite(self):
@@ -122,13 +140,21 @@ class TestCountingLogicInitialization:
         works correctly on first deployment before setup_shuttle() runs
         """
         import sqlite3
-        conn = sqlite3.connect("local_database/apcoms.db")
+        import os
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         cursor.execute("DELETE FROM system_state WHERE key='total_capacity'")
         conn.commit()
         conn.close()
 
-        logic = CountingLogic()
+        logic = CountingLogic(db_path=TEST_DB)
         assert logic.total_capacity == 20
 
     def test_falls_back_to_default_stops_if_not_in_sqlite(self):
@@ -138,13 +164,21 @@ class TestCountingLogicInitialization:
         works correctly on first deployment before setup_shuttle() runs
         """
         import sqlite3
-        conn = sqlite3.connect("local_database/apcoms.db")
+        import os
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         cursor.execute("DELETE FROM system_state WHERE key='designated_stops'")
         conn.commit()
         conn.close()
 
-        logic = CountingLogic()
+        logic = CountingLogic(db_path=TEST_DB)
         assert len(logic.designated_stops_list) > 0
 
 
@@ -156,9 +190,8 @@ class TestDirectionDetermination:
         moves from the upper half to the lower half of the camera frame
         confirming they are entering the shuttle
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
 
-        # person moving from upper (outside) to lower (inside)
         track = {
             "track_id": 1,
             "previous_centroid": (960, 200),  # upper half - outside
@@ -174,9 +207,8 @@ class TestDirectionDetermination:
         moves from the lower half to the upper half of the camera frame
         confirming they are exiting the shuttle
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
 
-        # person moving from lower (inside) to upper (outside)
         track = {
             "track_id": 1,
             "previous_centroid": (960, 700),  # lower half - inside
@@ -192,9 +224,8 @@ class TestDirectionDetermination:
         stays in the same zone so the system ignores unclear movements
         and does not incorrectly increment or decrement the count
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
 
-        # person staying in the same zone - unclear movement
         track = {
             "track_id": 1,
             "previous_centroid": (960, 200),  # upper half
@@ -210,7 +241,7 @@ class TestDirectionDetermination:
         to prevent the system from crashing when invalid data is
         received from the Object Tracking Component
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         direction = counter.determine_direction(None)
         assert direction == "undetermined"
 
@@ -223,7 +254,7 @@ class TestCountUpdating:
         a person boards the shuttle to maintain accurate real-time
         occupancy tracking as required by FR-CM-3.3
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.initialize()
         initial_count = counter.passenger_count
 
@@ -242,10 +273,9 @@ class TestCountUpdating:
         a person alights the shuttle to maintain accurate real-time
         occupancy tracking as required by FR-CM-3.4
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.initialize()
 
-        # first board someone
         board_track = {
             "track_id": 1,
             "previous_centroid": (960, 200),
@@ -254,7 +284,6 @@ class TestCountUpdating:
         counter.update_count(board_track)
         count_after_boarding = counter.passenger_count
 
-        # now alight someone with different track_id
         alight_track = {
             "track_id": 2,
             "previous_centroid": (960, 700),  # lower half - inside
@@ -269,7 +298,7 @@ class TestCountUpdating:
         counted twice to ensure each passenger is counted exactly once
         per boarding or alighting event as required by FR-CM-3.5
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.initialize()
         initial_count = counter.passenger_count
 
@@ -279,11 +308,9 @@ class TestCountUpdating:
             "current_centroid": (960, 700)
         }
 
-        # call update_count twice with same track_id
         counter.update_count(track)
         counter.update_count(track)
 
-        # count should only increment once!
         assert counter.passenger_count == initial_count + 1
 
     def test_does_not_exceed_total_capacity_on_boarding(self):
@@ -292,10 +319,9 @@ class TestCountUpdating:
         beyond total capacity to prevent the shuttle from being
         marked as having more passengers than it can physically carry
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.initialize()
 
-        # fill shuttle to capacity
         for i in range(20):
             track = {
                 "track_id": i,
@@ -304,7 +330,6 @@ class TestCountUpdating:
             }
             counter.update_count(track)
 
-        # try to board one more person
         extra_track = {
             "track_id": 99,
             "previous_centroid": (960, 200),
@@ -320,7 +345,7 @@ class TestCountUpdating:
         below zero to prevent negative occupancy values which would
         indicate a system error in the counting logic
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 0
         counter.available_seats = 20
 
@@ -340,7 +365,7 @@ class TestCountUpdating:
         as required by the pseudocode
         """
         import logging
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 20
         counter.available_seats = 0
 
@@ -361,7 +386,7 @@ class TestCountUpdating:
         counting error or invalid alighting event
         """
         import logging
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 0
         counter.available_seats = 20
 
@@ -384,7 +409,7 @@ class TestOccupancyCalculation:
         than 5 seats are free so students know they can comfortably
         board the shuttle without rushing
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 10
         counter.available_seats = 10
         occupancy = counter.calculate_occupancy()
@@ -396,7 +421,7 @@ class TestOccupancyCalculation:
         5 seats are available so students know the shuttle is filling
         up and they should hurry to the stop
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 17
         counter.available_seats = 3
         occupancy = counter.calculate_occupancy()
@@ -408,7 +433,7 @@ class TestOccupancyCalculation:
         are available so students know not to go to the shuttle stop
         and seek alternative transportation instead
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 20
         counter.available_seats = 0
         occupancy = counter.calculate_occupancy()
@@ -423,7 +448,7 @@ class TestStopManagement:
         from the designated stops list so the mobile app and Firebase
         can display accurate shuttle location to students
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.current_stop_index = 0
         current_stop = counter.get_current_stop()
         assert current_stop == counter.designated_stops_list[0]
@@ -434,7 +459,7 @@ class TestStopManagement:
         designated stops list to simulate the shuttle progressing
         along its predefined campus route
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.current_stop_index = 0
         first_stop = counter.get_current_stop()
         counter.advance_stop()
@@ -448,11 +473,9 @@ class TestStopManagement:
         the last stop to simulate the shuttle completing its full
         campus route loop and starting again from the beginning
         """
-        counter = CountingLogic(total_capacity=20)
-        # set to last stop
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.current_stop_index = len(counter.designated_stops_list) - 1
         counter.advance_stop()
-        # should wrap around to first stop
         assert counter.current_stop_index == 0
 
 
@@ -464,7 +487,7 @@ class TestCountReset:
         so the system can start a fresh count when called by an
         administrator via the Flask dashboard at end of day
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.passenger_count = 15
         counter.reset_count()
         assert counter.passenger_count == 0
@@ -475,7 +498,7 @@ class TestCountReset:
         capacity so the system correctly reflects an empty shuttle
         after a reset is performed by the administrator
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.available_seats = 5
         counter.reset_count()
         assert counter.available_seats == counter.total_capacity
@@ -486,7 +509,7 @@ class TestCountReset:
         previously counted track IDs don't prevent new passengers
         from being counted after a reset is performed
         """
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         counter.counted_tracks = [1, 2, 3, 4, 5]
         counter.reset_count()
         assert counter.counted_tracks == []
@@ -498,8 +521,7 @@ class TestCountReset:
         were performed and by whom
         """
         import logging
-        counter = CountingLogic(total_capacity=20)
+        counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         with caplog.at_level(logging.INFO):
             counter.reset_count()
         assert "Passenger count reset at:" in caplog.text
-

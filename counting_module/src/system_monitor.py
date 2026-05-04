@@ -1,15 +1,22 @@
 import logging
+import time
+
 
 logger = logging.getLogger(__name__)
 
 
 class SystemMonitor:
 
-    def __init__(self):
+    def __init__(self, data_logger=None):
         self.system_status = "Active"
         self.camera_status = "ok"
         self.fps_threshold = 30
         self.latency_threshold = 100
+        self.data_logger = data_logger
+        self._last_fps_log_time = 0
+        self._last_latency_log_time = 0
+        self._log_interval = 10  # only log to SQLite once every 10 seconds
+
 
     def initialize(self):
         """
@@ -27,11 +34,25 @@ class SystemMonitor:
         Sets system_status to Error when camera fails and attempts
         restart. Logs success or failure of restart attempt.
         """
-        self.camera_status = camera_status
+        # normalize: camera reports "active" when healthy, but dashboard expects "ok"
+        if camera_status == "active":
+            self.camera_status = "ok"
+        elif camera_status == "error":
+            self.camera_status = "error"
+        else:
+            self.camera_status = "unknown"
 
         if camera_status == "error":
             self.system_status = "Error"
             logger.warning("Camera error detected")
+            if self.data_logger:
+                self.data_logger.log_diagnostic({
+                    "log_type": "error",
+                    "message": "Camera error detected",
+                    "camera_status": "error",
+                    "fps": 0.0,
+                    "latency_ms": 0.0
+                })
 
             restart_successful = self._attempt_camera_restart()
 
@@ -56,13 +77,36 @@ class SystemMonitor:
         """
         Monitors AI model performance metrics and logs warnings when
         FPS drops below threshold or latency exceeds threshold.
-        Passes diagnostic data to Data Logger for persistence.
+        Passes diagnostic data to Data Logger for persistence with
+        rate limiting to avoid flooding the database.
         """
+
+        now = time.time()
+
         if fps < self.fps_threshold:
             logger.warning(f"FPS below threshold: {fps}")
+            # rate limit: only persist to SQLite every 10 seconds
+            if self.data_logger and (now - self._last_fps_log_time) >= self._log_interval:
+                self.data_logger.log_diagnostic({
+                    "log_type": "warning",
+                    "message": f"FPS below threshold: {fps:.1f}",
+                    "camera_status": self.camera_status,
+                    "fps": round(fps, 2),
+                    "latency_ms": round(latency_ms, 2)
+                })
+                self._last_fps_log_time = now
 
         if latency_ms > self.latency_threshold:
             logger.warning(f"Latency above threshold: {latency_ms}")
+            if self.data_logger and (now - self._last_latency_log_time) >= self._log_interval:
+                self.data_logger.log_diagnostic({
+                    "log_type": "warning",
+                    "message": f"Latency above threshold: {latency_ms:.1f}ms",
+                    "camera_status": self.camera_status,
+                    "fps": round(fps, 2),
+                    "latency_ms": round(latency_ms, 2)
+                })
+                self._last_latency_log_time = now
 
     def handle_alert(self, alert):
         """

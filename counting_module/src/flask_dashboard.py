@@ -1,6 +1,8 @@
 import logging
 import os
 from flask import Flask
+import sqlite3
+import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +71,93 @@ class FlaskDashboard:
                 logger.warning("Failed login attempt")
             return False
 
+    def check_end_of_day(self):
+        """
+        Detects when the shuttle's service hours have ended for the day
+        and performs end-of-day reset: clears passenger count, resets
+        stop index, so the new service day starts fresh.
+        Runs on every dashboard refresh but only resets once per day.
+        """
+
+        try:
+            conn = sqlite3.connect("local_database/apcoms.db")
+            cursor = conn.cursor()
+
+            # read day_end_time (default 24:00)
+            cursor.execute("SELECT value FROM system_state WHERE key='day_end_time'")
+            row = cursor.fetchone()
+            day_end = row[0] if row else "24:00"
+
+            # read last_reset_date
+            cursor.execute("SELECT value FROM system_state WHERE key='last_reset_date'")
+            row = cursor.fetchone()
+            last_reset_date = row[0] if row else None
+
+            # parse day_end
+            end_h, end_m = map(int, day_end.split(":"))
+            if end_h == 24:
+                end_h = 23
+                end_m = 59
+
+            now = datetime.datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            today_end = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+
+            # figure out the most recent day_end that should have triggered a reset
+            if now >= today_end:
+                most_recent_end_date = today_str
+            else:
+                yesterday = now - datetime.timedelta(days=1)
+                most_recent_end_date = yesterday.strftime("%Y-%m-%d")
+
+            # if we haven't reset for that day yet, do it now
+            if last_reset_date != most_recent_end_date:
+                logger.info(f"End of day detected - performing reset for {most_recent_end_date}")
+
+                # reset live state
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('current_count', '0')
+                """)
+
+                # read total_capacity to reset available_seats
+                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
+                cap_row = cursor.fetchone()
+                total_capacity = cap_row[0] if cap_row else "20"
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('available_seats', ?)
+                """, (total_capacity,))
+
+                # reset stop index back to first stop
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('current_stop_index', '0')
+                """)
+
+                # mark that we've reset for this date
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('last_reset_date', ?)
+                """, (most_recent_end_date,))
+
+                conn.commit()
+                logger.info("End of day reset completed successfully")
+
+            conn.close()
+
+        except Exception as e:
+            logger.error(f"Error during end of day check: {e}")
+
     def render_dashboard(self):
         """
         Retrieves current occupancy data, system status, recent
         diagnostic logs and today's summary from SQLite and returns
         them as a dictionary for rendering on the monitoring dashboard.
         """
-        import sqlite3
-        import datetime
+
+        # check if we need to perform end-of-day reset
+        self.check_end_of_day()
 
         occupancy = {
             "current_count": 0,
@@ -127,6 +208,66 @@ class FlaskDashboard:
             if row:
                 system_status["latency_ms"] = float(row[0])
 
+            cursor.execute("SELECT value FROM system_state WHERE key='current_count'")
+            row = cursor.fetchone()
+            if row:
+                occupancy["current_count"] = int(row[0])
+
+            cursor.execute("SELECT value FROM system_state WHERE key='available_seats'")
+            row = cursor.fetchone()
+            if row:
+                occupancy["available_seats"] = int(row[0])
+
+            cursor.execute("SELECT value FROM system_state WHERE key='current_stop'")
+            row = cursor.fetchone()
+            if row:
+                occupancy["current_stop"] = row[0]
+
+            # recalculate occupancy status from actual values
+            seats = occupancy["available_seats"]
+            if seats > 5:
+                occupancy["occupancy_status"] = "Available"
+            elif seats >= 1:
+                occupancy["occupancy_status"] = "Nearly Full"
+            else:
+                occupancy["occupancy_status"] = "Full"
+
+            # ── service hours override ──────────────────────────
+            # read service hours (default: 06:00 to 24:00)
+            cursor.execute("SELECT value FROM system_state WHERE key='day_start_time'")
+            row = cursor.fetchone()
+            day_start = row[0] if row else "06:00"
+
+            cursor.execute("SELECT value FROM system_state WHERE key='day_end_time'")
+            row = cursor.fetchone()
+            day_end = row[0] if row else "24:00"
+
+            # parse times
+            now = datetime.datetime.now().time()
+            start_h, start_m = map(int, day_start.split(":"))
+            end_h, end_m = map(int, day_end.split(":"))
+
+            # handle "24:00" as end-of-day (just before midnight)
+            if end_h == 24:
+                end_h = 23
+                end_m = 59
+
+            start_time = datetime.time(start_h, start_m)
+            end_time = datetime.time(end_h, end_m)
+
+            in_service = start_time <= now <= end_time
+
+            # override system_status based on service hours
+            current_status = system_status["system_status"]
+
+            if not in_service:
+                # outside service hours - day is over
+                system_status["system_status"] = "Offline"
+            elif current_status == "Offline":
+                # inside service hours but main.py is not running
+                # shuttle is paused at a stop or on a break
+                system_status["system_status"] = "At a stop"
+
             # read diagnostic logs
             cursor.execute("""
                 SELECT timestamp, log_type, message, camera_status, fps, latency_ms
@@ -145,19 +286,26 @@ class FlaskDashboard:
                     "latency_ms": row[5]
                 })
 
-            # today's summary
-            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            # today's summary - use last_reset_date as cutoff so summary aligns with service day
+            cursor.execute("SELECT value FROM system_state WHERE key='last_reset_date'")
+            reset_row = cursor.fetchone()
+            if reset_row:
+                # use the day after last reset as the start of "today's" service day
+                last_reset = datetime.datetime.strptime(reset_row[0], "%Y-%m-%d")
+                cutoff = (last_reset + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                cutoff = datetime.datetime.now().strftime("%Y-%m-%d")
 
             cursor.execute("""
                 SELECT COUNT(*) FROM passenger_events
                 WHERE direction = 'boarding' AND timestamp >= ?
-            """, (today,))
+            """, (cutoff,))
             today_summary["boardings"] = cursor.fetchone()[0]
 
             cursor.execute("""
                 SELECT COUNT(*) FROM passenger_events
                 WHERE direction = 'alighting' AND timestamp >= ?
-            """, (today,))
+            """, (cutoff,))
             today_summary["alightings"] = cursor.fetchone()[0]
 
             cursor.execute("""
@@ -165,7 +313,7 @@ class FlaskDashboard:
                 FROM passenger_events
                 WHERE direction = 'boarding' AND timestamp >= ?
                 GROUP BY hour ORDER BY count DESC LIMIT 1
-            """, (today,))
+            """, (cutoff,))
             peak_row = cursor.fetchone()
             today_summary["peak_hour"] = f"{peak_row[0]}:00" if peak_row else "N/A"
 
@@ -174,7 +322,7 @@ class FlaskDashboard:
                 FROM passenger_events
                 WHERE direction = 'boarding' AND timestamp >= ?
                 GROUP BY stop_location ORDER BY count DESC LIMIT 1
-            """, (today,))
+            """, (cutoff,))
             stop_row = cursor.fetchone()
             today_summary["most_active_stop"] = stop_row[0] if stop_row else "N/A"
 
@@ -367,44 +515,66 @@ class FlaskDashboard:
         logger.info(f"Alert displayed on dashboard: {message}")
         return message
 
-    def setup_shuttle(self, shuttle_id, shuttle_name, total_capacity, designated_stops):
+    def setup_shuttle(self, shuttle_id, shuttle_name, total_capacity, designated_stops,
+                  day_start_time=None, day_end_time=None):
         """
         Writes shuttle configuration to SQLite system_state table
         so CountingLogic can read updated settings on next startup.
         Validates all fields before writing.
+        Service hours (day_start_time, day_end_time) are optional and
+        determine when the shuttle is in service for status tracking.
         Returns True on success, False on failure.
         Logs success when shuttle setup is complete.
         """
         import sqlite3
         import json
 
-        if not shuttle_id or not shuttle_name or not total_capacity or not designated_stops:
-            logger.warning("Shuttle setup failed - missing required fields")
+        # require at least ONE field to be provided (so admin can update partial settings)
+        if not any([shuttle_id, shuttle_name, total_capacity, designated_stops, day_start_time, day_end_time]):
+            logger.warning("Shuttle setup failed - no fields provided")
             return False
 
         try:
             conn = sqlite3.connect("local_database/apcoms.db")
             cursor = conn.cursor()
 
-            cursor.execute("""
-                INSERT OR REPLACE INTO system_state (key, value)
-                VALUES ('total_capacity', ?)
-            """, (str(total_capacity),))
+            # only save fields that were actually provided
+            if total_capacity:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('total_capacity', ?)
+                """, (str(total_capacity),))
 
-            cursor.execute("""
-                INSERT OR REPLACE INTO system_state (key, value)
-                VALUES ('designated_stops', ?)
-            """, (json.dumps(designated_stops),))
+            if designated_stops:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('designated_stops', ?)
+                """, (json.dumps(designated_stops),))
 
-            cursor.execute("""
-                INSERT OR REPLACE INTO system_state (key, value)
-                VALUES ('shuttle_id', ?)
-            """, (shuttle_id,))
+            if shuttle_id:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('shuttle_id', ?)
+                """, (shuttle_id,))
 
-            cursor.execute("""
-                INSERT OR REPLACE INTO system_state (key, value)
-                VALUES ('shuttle_name', ?)
-            """, (shuttle_name,))
+            if shuttle_name:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('shuttle_name', ?)
+                """, (shuttle_name,))
+
+            # save service hours if provided
+            if day_start_time:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('day_start_time', ?)
+                """, (day_start_time,))
+
+            if day_end_time:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('day_end_time', ?)
+                """, (day_end_time,))
 
             conn.commit()
             conn.close()
@@ -505,7 +675,9 @@ class FlaskDashboard:
                 shuttle_id=data.get("shuttle_id"),
                 shuttle_name=data.get("shuttle_name"),
                 total_capacity=data.get("total_capacity"),
-                designated_stops=data.get("designated_stops")
+                designated_stops=data.get("designated_stops"),
+                day_start_time=data.get("day_start_time"),
+                day_end_time=data.get("day_end_time")
             )
             if result:
                 return jsonify({"status": "success"})
