@@ -98,13 +98,14 @@ class _Avatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final initial = nameFallback.isEmpty ? '?' : nameFallback.characters.first;
-    final hasPhoto = photoUrl != null && photoUrl!.trim().isNotEmpty;
-    return CircleAvatar(
+      final _photo = photoUrl?.trim();
+      final hasPhoto = _photo?.isNotEmpty ?? false;
+      return CircleAvatar(
       radius: 22,
       backgroundColor: hasPhoto
           ? Theme.of(context).colorScheme.primaryContainer
           : Colors.amber.shade200,
-      foregroundImage: hasPhoto ? NetworkImage(photoUrl!) : null,
+        foregroundImage: hasPhoto ? NetworkImage(_photo!) : null,
       child: Text(
         initial.toUpperCase(),
         style: Theme.of(

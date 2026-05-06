@@ -17,6 +17,8 @@ dependencies:
   flutter_map: ^7.0.0
   latlong2: ^0.9.1
   qr_flutter: ^4.1.0
+  path_provider: ^2.0.0
+  path: ^1.8.0
 
 dev_dependencies:
   flutter_test:
@@ -27,4 +29,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+  # required for saving ticket PNG on mobile
 #https://console.firebase.google.com/project/shuttleapp-260f8/database/shuttleapp-260f8-default-rtdb/data/~2F

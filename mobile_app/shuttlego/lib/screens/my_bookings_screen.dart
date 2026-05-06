@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../models/booking_receipt.dart';
@@ -21,6 +23,30 @@ BookingReceipt _receiptFromBooking(BookingRecord booking) {
   );
 }
 
+// Shared date helper for multiple widgets to format display date.
+String _formatDate(DateTime d) {
+  final month = _monthName(d.month);
+  return '$month ${d.day}, ${d.year}';
+}
+
+String _monthName(int m) {
+  const names = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return names[m - 1];
+}
+
 class MyBookingsScreen extends StatefulWidget {
   const MyBookingsScreen({super.key, this.service});
 
@@ -32,87 +58,177 @@ class MyBookingsScreen extends StatefulWidget {
 
 class _MyBookingsScreenState extends State<MyBookingsScreen> {
   late final BookingService _service = widget.service ?? BookingService();
+  Stream<List<BookingRecord>>? _bookingsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    // Stream will be created lazily and reused by the StreamBuilder.
+  }
+
+  // Removed temporary one-shot debug and debug listener.
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    final scheme = Theme.of(context).colorScheme;
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final scheme = Theme.of(context).colorScheme;
 
-    if (user == null) {
-      return const Center(child: Text('Please sign in to view bookings.'));
-    }
+      if (user == null) {
+        return const Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(child: Text('Please sign in to view bookings.')),
+        );
+      }
 
-    return ColoredBox(
-      color: Colors.white,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Text(
-              'My Bookings',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: scheme.onSurface,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
+      return Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          title: const Text('My Bookings'),
+          backgroundColor: Colors.white,
+          foregroundColor: scheme.onSurface,
+          elevation: 0,
+          surfaceTintColor: Colors.white,
+        ),
+        body: StreamBuilder<List<BookingRecord>>(
+          stream: _bookingsStream ??= _service.watchUserBookings(
+            userUid: user.uid,
           ),
-          Expanded(
-            child: StreamBuilder<List<BookingRecord>>(
-              stream: _service.watchUserBookings(userUid: user.uid),
-              builder: (context, snapshot) {
-                final bookings = snapshot.data ?? const <BookingRecord>[];
+          initialData: const <BookingRecord>[],
+          builder: (context, snapshot) {
+            final bookings = snapshot.data ?? const <BookingRecord>[];
 
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                bookings.isEmpty) {
+              return const Center(child: CircularProgressIndicator());
+            }
 
-                if (snapshot.hasError) {
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      'Could not load bookings.\n${snapshot.error}',
-                      style: Theme.of(context).textTheme.bodyMedium,
+            if (snapshot.hasError) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Could not load bookings.\n${snapshot.error}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              );
+            }
+
+            if (bookings.isEmpty) return _BookingsEmptyState(uid: user.uid);
+
+            final active = bookings.where((b) => b.isActive).toList();
+            final past = bookings.where((b) => !b.isActive).toList();
+
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+              children: [
+                if (active.isNotEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: scheme.primary.withOpacity(0.12),
+                      ),
                     ),
-                  );
-                }
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle, color: scheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'You can only have one active booking. Make a new booking after your current trip.',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Active Booking',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final booking in active)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _BookingTile(
+                        booking: booking,
+                        onOpen: () => _openDetails(booking),
+                        onShowQr: () => _showQr(booking),
+                        onCancel: booking.isActive
+                            ? () => _cancelBooking(booking)
+                            : null,
+                      ),
+                    ),
+                ],
 
-                if (bookings.isEmpty) {
-                  return _BookingsEmptyState(uid: user.uid);
-                }
-
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  itemCount: bookings.length,
-                  separatorBuilder: (context, index) =>
-                      const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final booking = bookings[index];
-                    return _BookingTile(
-                      booking: booking,
-                      onOpen: () => _openDetails(booking),
-                      onShowQr: () => _showQr(booking),
-                      onCancel: booking.isActive
-                          ? () => _cancelBooking(booking)
-                          : null,
-                    );
-                  },
-                );
-              },
+                if (past.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Past Bookings',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final booking in past)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _BookingTile(
+                        booking: booking,
+                        onOpen: () => _openDetails(booking),
+                        onShowQr: () => _showQr(booking),
+                        onCancel: () => _deleteBooking(booking),
+                      ),
+                    ),
+                ],
+              ],
+            );
+          },
+        ),
+      );
+    } catch (e, st) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                const SizedBox(height: 12),
+                Text(
+                  'An error occurred while rendering My Bookings:',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  e.toString(),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.red),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(st.toString()),
+              ],
             ),
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
   }
 
   Future<void> _openDetails(BookingRecord booking) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => BookingDetailsScreen(
-          booking: booking,
-          service: _service,
-        ),
+        builder: (context) =>
+            BookingDetailsScreen(booking: booking, service: _service),
       ),
     );
   }
@@ -120,9 +236,8 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
   void _showQr(BookingRecord booking) {
     showDialog<void>(
       context: context,
-      builder: (context) => _BookingQrDialog(
-        receipt: _receiptFromBooking(booking),
-      ),
+      builder: (context) =>
+          _BookingQrDialog(receipt: _receiptFromBooking(booking)),
     );
   }
 
@@ -144,10 +259,45 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
     }
   }
 
+  Future<void> _deleteBooking(BookingRecord booking) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete booking'),
+        content: const Text('Delete this past booking? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirm != true) return;
+
+    try {
+      await _service.deleteBooking(booking: booking);
+      if (!mounted) return;
+      _showSnack('Booking deleted.');
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('Delete failed. ${e.toString()}');
+    }
+  }
+
   void _showSnack(String message) {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 }
 
@@ -173,25 +323,25 @@ class _BookingsEmptyState extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               'No bookings found',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
               'This page shows bookings where user_uid matches your signed-in account.',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 10),
             SelectableText(
               'Current uid: $uid',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -217,85 +367,175 @@ class _BookingTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final statusColor = booking.isActive ? scheme.primary : scheme.error;
+    final created = booking.createdAt != null
+        ? DateTime.fromMillisecondsSinceEpoch(booking.createdAt!).toLocal()
+        : null;
+    final dateText = created != null ? '${_formatDate(created)}' : '';
+    final timeText = created != null ? '${_formatTime(created, context)}' : '';
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onOpen,
+    // Map status to display label and colors to match the design
+    final statusLabel = booking.status.toLowerCase() == 'reserved'
+        ? 'ACTIVE'
+        : booking.status.toLowerCase() == 'completed'
+        ? 'COMPLETED'
+        : booking.status.toUpperCase();
+
+    Color tileIconColor;
+    Color tileBgColor;
+    Color statusChipBg;
+    Color statusChipText;
+
+    if (booking.status.toLowerCase() == 'reserved') {
+      tileIconColor = const Color(0xFF1E8E3E);
+      tileBgColor = const Color(0xFFE9F6ED);
+      statusChipBg = const Color(0xFFECF8F0);
+      statusChipText = const Color(0xFF1E8E3E);
+    } else if (booking.status.toLowerCase() == 'completed') {
+      tileIconColor = const Color(0xFF6B7280);
+      tileBgColor = const Color(0xFFF3F4F6);
+      statusChipBg = const Color(0xFFF8FAFC);
+      statusChipText = const Color(0xFF6B7280);
+    } else {
+      // cancelled or other
+      tileIconColor = const Color(0xFFBF3B3B);
+      tileBgColor = const Color(0xFFFFF4F4);
+      statusChipBg = const Color(0xFFFFF1F2);
+      statusChipText = const Color(0xFFBF3B3B);
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.4),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: scheme.outlineVariant.withOpacity(0.06)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: tileBgColor,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.directions_bus_filled,
+                    color: tileIconColor,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${booking.pickupStop.toUpperCase()}  →  ${booking.destinationStop.toUpperCase()}',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: statusChipBg,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              statusLabel,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: statusChipText,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.calendar_month_outlined,
+                            size: 16,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            dateText,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                          const SizedBox(width: 12),
+                          Icon(
+                            Icons.access_time,
+                            size: 16,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            timeText,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (!booking.isActive && onCancel != null)
+                  IconButton(
+                    onPressed: onCancel,
+                    icon: Icon(Icons.delete_outline, color: scheme.error),
+                    tooltip: 'Delete booking',
+                  ),
+              ],
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          const Divider(height: 1),
+          InkWell(
+            onTap: onOpen,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      '${booking.pickupStop} to ${booking.destinationStop}',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
                   Text(
-                    booking.status,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: statusColor,
-                      fontWeight: FontWeight.w700,
+                    'View Details',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF0F9D58),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.chevron_right,
-                    color: scheme.onSurfaceVariant,
-                    size: 20,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Ticket: ${booking.bookingId}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              if ((booking.cancelReason ?? '').isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  'Reason: ${booking.cancelReason}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: onShowQr,
-                    icon: const Icon(Icons.qr_code_2, size: 18),
-                    label: const Text('QR'),
                   ),
                   const Spacer(),
-                  if (onCancel != null)
-                    TextButton(onPressed: onCancel, child: const Text('Cancel')),
+                  Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
                 ],
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
+  }
+
+  String _formatTime(DateTime d, BuildContext context) {
+    final t = TimeOfDay.fromDateTime(d);
+    return t.format(context);
   }
 }
 
@@ -315,98 +555,279 @@ class BookingDetailsScreen extends StatefulWidget {
 
 class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   bool _isCancelling = false;
+  bool _isDeleting = false;
+  bool _isDownloading = false;
 
   BookingRecord get booking => widget.booking;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final receipt = _receiptFromBooking(booking);
-    final statusColor = booking.isActive ? scheme.primary : scheme.error;
+    try {
+      final scheme = Theme.of(context).colorScheme;
+      final receipt = _receiptFromBooking(booking);
+      final statusColor = booking.isActive ? scheme.primary : scheme.error;
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text('Booking Details'),
+      return Scaffold(
         backgroundColor: Colors.white,
-        foregroundColor: scheme.onSurface,
-        elevation: 0,
-        surfaceTintColor: Colors.white,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.4),
+        appBar: AppBar(
+          title: const Text('Booking Details'),
+          backgroundColor: Colors.white,
+          foregroundColor: scheme.onSurface,
+          elevation: 0,
+          surfaceTintColor: Colors.white,
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+          children: [
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  booking.status.toUpperCase(),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: statusColor,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ),
             ),
-            child: Column(
-              children: [
-                SizedBox(
-                  height: 230,
-                  width: 230,
-                  child: QrImageView(
-                    data: receipt.qrPayload,
-                    version: QrVersions.auto,
-                    gapless: false,
-                  ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: scheme.outlineVariant.withOpacity(0.12),
                 ),
+              ),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 220,
+                    width: 220,
+                    child: QrImageView(
+                      data: receipt.qrPayload,
+                      version: QrVersions.auto,
+                      gapless: false,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Show this QR code when boarding.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  // Codes row (e.g. CEDAT -> COCIS)
+                  Text(
+                    '${booking.pickupStop.toUpperCase()}  →  ${booking.destinationStop.toUpperCase()}',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.calendar_month_outlined,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        booking.createdAt != null
+                            ? _formatDate(
+                                DateTime.fromMillisecondsSinceEpoch(
+                                  booking.createdAt!,
+                                ).toLocal(),
+                              )
+                            : '',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Icon(
+                        Icons.access_time,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        booking.createdAt != null
+                            ? TimeOfDay.fromDateTime(
+                                DateTime.fromMillisecondsSinceEpoch(
+                                  booking.createdAt!,
+                                ).toLocal(),
+                              ).format(context)
+                            : '',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _isDownloading ? null : _downloadTicket,
+                      icon: _isDownloading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.download_outlined),
+                      label: const Text('Download'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    _InfoRow(
+                      icon: Icons.location_on_outlined,
+                      label: 'Pickup',
+                      value: booking.pickupStop,
+                    ),
+                    _InfoRow(
+                      icon: Icons.location_on,
+                      label: 'Destination',
+                      value: booking.destinationStop,
+                    ),
+                    _InfoRow(
+                      icon: Icons.event,
+                      label: 'Shuttle Date',
+                      value: booking.createdAt != null
+                          ? DateTime.fromMillisecondsSinceEpoch(
+                              booking.createdAt!,
+                            ).toLocal().toIso8601String().split('T').first
+                          : '',
+                    ),
+                    _InfoRow(
+                      icon: Icons.access_time,
+                      label: 'Time',
+                      value: booking.createdAt != null
+                          ? TimeOfDay.fromDateTime(
+                              DateTime.fromMillisecondsSinceEpoch(
+                                booking.createdAt!,
+                              ).toLocal(),
+                            ).format(context)
+                          : '',
+                    ),
+                    _InfoRow(
+                      icon: Icons.confirmation_number_outlined,
+                      label: 'Ticket ID',
+                      value: booking.bookingId,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            // Action buttons: Download already provided above. Show cancel for
+            // active bookings and delete for past bookings.
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: booking.isActive
+                  ? FilledButton.icon(
+                      onPressed: _isCancelling ? null : _cancelBooking,
+                      icon: _isCancelling
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.delete_outline),
+                      label: const Text('Cancel Booking'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: scheme.error,
+                        foregroundColor: scheme.onError,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _isDeleting ? null : _deleteBooking,
+                      icon: _isDeleting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.delete_forever),
+                      label: const Text('Delete Booking'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: scheme.error,
+                        foregroundColor: scheme.onError,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      );
+    } catch (e, st) {
+      // Show the error so it's visible in the UI instead of crashing to white screen
+      debugPrint('BookingDetails build error: $e\n$st');
+      return Scaffold(
+        appBar: AppBar(title: const Text('Booking Details')),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.red),
                 const SizedBox(height: 12),
                 Text(
-                  'Show this QR code when boarding.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
+                  'An error occurred while rendering booking details:',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _showQr(receipt),
-                    icon: const Icon(Icons.download),
-                    label: const Text('View or Download Ticket'),
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  e.toString(),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.red),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  st.toString(),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 14),
-          _DetailRow(label: 'Status', value: booking.status, color: statusColor),
-          _DetailRow(label: 'Pickup', value: booking.pickupStop),
-          _DetailRow(label: 'Destination', value: booking.destinationStop),
-          _DetailRow(label: 'Shuttle', value: booking.shuttleKey),
-          _DetailRow(label: 'Ticket ID', value: booking.bookingId),
-          if ((booking.cancelReason ?? '').isNotEmpty)
-            _DetailRow(label: 'Cancel reason', value: booking.cancelReason!),
-          const SizedBox(height: 16),
-          if (booking.isActive)
-            SizedBox(
-              width: double.infinity,
-              height: 46,
-              child: FilledButton(
-                onPressed: _isCancelling ? null : _cancelBooking,
-                style: FilledButton.styleFrom(
-                  backgroundColor: scheme.error,
-                  foregroundColor: scheme.onError,
-                ),
-                child: _isCancelling
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Cancel Reservation'),
-              ),
-            ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
   }
 
   void _showQr(BookingReceipt receipt) {
@@ -441,6 +862,91 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
       if (mounted) setState(() => _isCancelling = false);
     }
   }
+
+  Future<void> _downloadTicket() async {
+    setState(() => _isDownloading = true);
+    try {
+      final painter = QrPainter(
+        data: _receiptFromBooking(booking).qrPayload,
+        version: QrVersions.auto,
+        gapless: false,
+        eyeStyle: const QrEyeStyle(
+          eyeShape: QrEyeShape.square,
+          color: Colors.black,
+        ),
+        dataModuleStyle: const QrDataModuleStyle(
+          dataModuleShape: QrDataModuleShape.square,
+          color: Colors.black,
+        ),
+      );
+      final imageData = await painter.toImageData(720);
+      final bytes = imageData?.buffer.asUint8List();
+      if (bytes == null) throw StateError('Could not render QR code.');
+
+      final downloaded = await downloadTicketPng(
+        fileName: 'shuttlego-ticket-${booking.bookingId}.png',
+        bytes: bytes,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              downloaded
+                  ? 'Ticket downloaded.'
+                  : 'Download is available on web only.',
+            ),
+          ),
+        );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(content: Text('Download failed. $e')));
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
+    }
+  }
+
+  Future<void> _deleteBooking() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete booking'),
+        content: const Text('Delete this booking permanently?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirm != true) return;
+
+    setState(() => _isDeleting = true);
+    try {
+      await widget.service.deleteBooking(booking: booking);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Booking deleted.')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(content: Text('Delete failed. $e')));
+    } finally {
+      if (mounted) setState(() => _isDeleting = false);
+    }
+  }
 }
 
 class _DetailRow extends StatelessWidget {
@@ -462,9 +968,9 @@ class _DetailRow extends StatelessWidget {
             width: 104,
             child: Text(
               label,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           Expanded(
@@ -474,6 +980,49 @@ class _DetailRow extends StatelessWidget {
                 color: color ?? scheme.onSurface,
                 fontWeight: FontWeight.w600,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 104,
+            child: Text(
+              label,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -511,9 +1060,9 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
           children: [
             Text(
               'Cancel booking',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
