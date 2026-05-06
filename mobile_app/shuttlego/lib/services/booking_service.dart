@@ -240,6 +240,19 @@ class BookingService {
     });
   }
 
+  /// Permanently delete a past booking from both the global `bookings`
+  /// collection and the user's `user_bookings` entry.
+  Future<void> deleteBooking({required BookingRecord booking}) async {
+    if (booking.isActive) {
+      throw BookingException('Only past bookings can be deleted.');
+    }
+
+    await _database.ref().update(<String, Object?>{
+      'bookings/${booking.bookingId}': null,
+      'user_bookings/${booking.userUid}/${booking.bookingId}': null,
+    });
+  }
+
   Future<int> _fetchActiveReservationCount(String shuttleKey) async {
     final snapshot = await _database
         .ref()
