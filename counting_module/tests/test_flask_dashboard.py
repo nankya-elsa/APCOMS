@@ -206,25 +206,15 @@ class TestAnalytics:
         assert result is not None
         assert isinstance(result, dict)
 
-    def test_returns_total_boardings_today(self):
+    def test_returns_total_boardings(self):
         """
-        Test that generate_analytics() returns total boardings today
-        so fleet managers can track daily passenger demand and
-        optimize shuttle schedules accordingly
+        Test that generate_analytics() returns total boardings since deployment
+        so fleet managers can verify overall shuttle adoption.
         """
         dashboard = FlaskDashboard()
         result = dashboard.generate_analytics()
-        assert "total_boardings_today" in result
+        assert "total_boardings" in result
 
-    def test_returns_total_alightings_today(self):
-        """
-        Test that generate_analytics() returns total alightings today
-        so fleet managers can verify boarding and alighting counts
-        balance correctly throughout the service day
-        """
-        dashboard = FlaskDashboard()
-        result = dashboard.generate_analytics()
-        assert "total_alightings_today" in result
 
     def test_returns_peak_hour(self):
         """

@@ -3,6 +3,9 @@ import os
 from flask import Flask
 import sqlite3
 import datetime
+import sqlite3
+import csv
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -338,97 +341,168 @@ class FlaskDashboard:
             "today_summary": today_summary
         }
 
-    def generate_analytics(self):
+    def generate_analytics(self, start_date=None, end_date=None, start_time=None, end_time=None):
         """
         Queries the passenger_events table in SQLite to generate
-        operational analytics including total boardings, alightings,
-        peak hour, most popular stop and average occupancy for today.
-        Returns all analytics data as a dictionary.
+        operational analytics. When date range is provided, filters
+        accordingly. Otherwise returns all historical data since
+        deployment. Returns summary metrics plus chart-ready datasets
+        for shuttle adoption, peak hours, and stop popularity.
         """
         import sqlite3
-        import datetime
 
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-
-        total_boardings_today = 0
-        total_alightings_today = 0
+        total_boardings = 0
         peak_hour = "N/A"
         most_popular_stop = "N/A"
         average_occupancy = 0.0
+        adoption_data = {"labels": [], "values": []}
+        peak_hours_data = {"labels": [], "values": []}
+        stop_popularity_data = {"labels": [], "values": []}
+        day_of_week_data = {"labels": [], "values": []}
 
         try:
             conn = sqlite3.connect("local_database/apcoms.db")
             cursor = conn.cursor()
 
-            # total boardings today
-            cursor.execute("""
-                SELECT COUNT(*) FROM passenger_events
-                WHERE direction = 'boarding' AND timestamp >= ?
-            """, (today,))
-            total_boardings_today = cursor.fetchone()[0]
+            # build optional date filter
+            date_filter = ""
+            params = []
+            if start_date:
+                date_filter += " AND timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                # add a full day so end_date is inclusive
+                date_filter += " AND timestamp <= ?"
+                params.append(end_date + " 23:59:59")
+                # time-of-day filter applied to EACH day in the range
+            if start_time:
+                date_filter += " AND strftime('%H:%M', timestamp) >= ?"
+                params.append(start_time)
+            if end_time:
+                date_filter += " AND strftime('%H:%M', timestamp) <= ?"
+                params.append(end_time)
 
-            # total alightings today
-            cursor.execute("""
-                SELECT COUNT(*) FROM passenger_events
-                WHERE direction = 'alighting' AND timestamp >= ?
-            """, (today,))
-            total_alightings_today = cursor.fetchone()[0]
-
-            # peak hour
-            cursor.execute("""
-                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
-                FROM passenger_events
-                WHERE direction = 'boarding' AND timestamp >= ?
-                GROUP BY hour ORDER BY count DESC LIMIT 1
-            """, (today,))
-            row = cursor.fetchone()
-            if row:
-                peak_hour = f"{row[0]}:00"
-
-            # most popular stop
-            cursor.execute("""
-                SELECT stop_location, COUNT(*) as count
-                FROM passenger_events
-                WHERE direction = 'boarding' AND timestamp >= ?
-                GROUP BY stop_location ORDER BY count DESC LIMIT 1
-            """, (today,))
-            row = cursor.fetchone()
-            if row:
-                most_popular_stop = row[0]
+            # total boardings (filtered or all-time)
+            query = f"SELECT COUNT(*) FROM passenger_events WHERE direction='boarding' {date_filter}"
+            cursor.execute(query, params)
+            total_boardings = cursor.fetchone()[0]
 
             # average occupancy
-            cursor.execute("""
-                SELECT AVG(passenger_count) FROM passenger_events
-                WHERE timestamp >= ?
-            """, (today,))
+            query = f"SELECT AVG(passenger_count) FROM passenger_events WHERE 1=1 {date_filter}"
+            cursor.execute(query, params)
             row = cursor.fetchone()
-            if row[0]:
-                average_occupancy = round(row[0], 2)
+            average_occupancy = round(row[0], 2) if row[0] else 0.0
+
+            # peak hour
+            query = f"""
+                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY hour ORDER BY count DESC LIMIT 1
+            """
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            peak_hour = f"{row[0]}:00" if row else "N/A"
+
+            # most popular stop
+            query = f"""
+                SELECT stop_location, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY stop_location ORDER BY count DESC LIMIT 1
+            """
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            most_popular_stop = row[0] if row else "N/A"
+
+            #  Graph 1: Shuttle Adoption (boardings per day)
+            query = f"""
+                SELECT DATE(timestamp) as day, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY day ORDER BY day ASC
+            """
+            cursor.execute(query, params)
+            for day, count in cursor.fetchall():
+                adoption_data["labels"].append(day)
+                adoption_data["values"].append(count)
+
+            # Graph 2: Peak Hours (boardings per hour)
+            # initialize all 24 hours so chart shows full day
+            hourly = {f"{h:02d}:00": 0 for h in range(24)}
+            query = f"""
+                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY hour
+            """
+            cursor.execute(query, params)
+            for hour, count in cursor.fetchall():
+                hourly[f"{hour}:00"] = count
+            peak_hours_data["labels"] = list(hourly.keys())
+            peak_hours_data["values"] = list(hourly.values())
+
+            # Graph 3: Stop Popularity (boardings per stop)
+            query = f"""
+                SELECT stop_location, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY stop_location ORDER BY count DESC
+            """
+            cursor.execute(query, params)
+            for stop, count in cursor.fetchall():
+                stop_popularity_data["labels"].append(stop)
+                stop_popularity_data["values"].append(count)
+
+            # Graph 4: Day-of-Week Pattern (boardings per weekday)
+            weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            weekday_counts = {name: 0 for name in weekday_names}
+
+            # SQLite strftime('%w') returns 0=Sunday, 1=Monday, ..., 6=Saturday
+            query = f"""
+                SELECT strftime('%w', timestamp) as weekday, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY weekday
+            """
+            cursor.execute(query, params)
+            sqlite_to_name = {"1": "Monday", "2": "Tuesday", "3": "Wednesday",
+                            "4": "Thursday", "5": "Friday", "6": "Saturday", "0": "Sunday"}
+            for weekday, count in cursor.fetchall():
+                name = sqlite_to_name.get(weekday)
+                if name:
+                    weekday_counts[name] = count
+
+            day_of_week_data["labels"] = weekday_names
+            day_of_week_data["values"] = [weekday_counts[name] for name in weekday_names]
 
             conn.close()
 
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error generating analytics: {e}")
 
         return {
-            "total_boardings_today": total_boardings_today,
-            "total_alightings_today": total_alightings_today,
+            "total_boardings": total_boardings,
+            "average_occupancy": average_occupancy,
             "peak_hour": peak_hour,
             "most_popular_stop": most_popular_stop,
-            "average_occupancy": average_occupancy
+            "adoption_data": adoption_data,
+            "peak_hours_data": peak_hours_data,
+            "stop_popularity_data": stop_popularity_data,
+            "day_of_week_data": day_of_week_data
         }
 
-    def export_data(self, start_date=None, end_date=None, direction=None, stop_location=None):
+    def export_data(self, start_date=None, end_date=None, start_time=None, end_time=None,
+                direction=None, stop_location=None):
         """
         Queries passenger events from SQLite with optional filters
-        for date range, direction and stop location. Formats data
-        as CSV string for download by administrator.
+        for date range, time-of-day range, direction and stop location.
+        Time filters apply to each day in the date range so admins can
+        isolate patterns like morning rush across multiple days.
+        Formats data as CSV string for download by administrator.
         Logs success when data is exported.
         Returns CSV formatted string of filtered passenger events.
         """
-        import sqlite3
-        import csv
-        import io
 
         output = io.StringIO()
         writer = csv.writer(output)
@@ -456,7 +530,15 @@ class FlaskDashboard:
 
             if end_date:
                 query += " AND timestamp <= ?"
-                params.append(end_date)
+                params.append(end_date + " 23:59:59")
+
+            if start_time:
+                query += " AND strftime('%H:%M', timestamp) >= ?"
+                params.append(start_time)
+
+            if end_time:
+                query += " AND strftime('%H:%M', timestamp) <= ?"
+                params.append(end_time)
 
             if direction:
                 query += " AND direction = ?"
@@ -632,9 +714,30 @@ class FlaskDashboard:
                 return redirect(url_for("login"))
             data = self.render_dashboard()
             analytics = self.generate_analytics()
+            # get list of stops for export dropdown
+            import sqlite3, json
+            stops = []
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
+                row = cursor.fetchone()
+                if row:
+                    stops = json.loads(row[0])
+                conn.close()
+            except Exception:
+                pass
+            # fallback to default stops if not set in system_state
+            if not stops:
+                stops = [
+                    "Western Gate", "CEDAT", "CONAS", "Main Library",
+                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
+                ]
             return render_template("dashboard.html",
-                                 data=data,
-                                 analytics=analytics)
+                                data=data,
+                                analytics=analytics,
+                                stops=stops)
 
         @app.route("/export")
         def export():
@@ -643,11 +746,15 @@ class FlaskDashboard:
             from flask import Response
             start_date = request.args.get("start_date")
             end_date = request.args.get("end_date")
+            start_time = request.args.get("start_time")
+            end_time = request.args.get("end_time")
             direction = request.args.get("direction")
             stop_location = request.args.get("stop_location")
             csv_data = self.export_data(
                 start_date=start_date,
                 end_date=end_date,
+                start_time=start_time,
+                end_time=end_time,
                 direction=direction,
                 stop_location=stop_location
             )
@@ -689,3 +796,87 @@ class FlaskDashboard:
                 return __import__("flask").jsonify({"error": "unauthorized"}), 401
             data = self.render_dashboard()
             return __import__("flask").jsonify(data)
+
+        @app.route("/api/analytics")
+        def api_analytics():
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import request, jsonify
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+            start_time = request.args.get("start_time")
+            end_time = request.args.get("end_time")
+            analytics = self.generate_analytics(
+                start_date=start_date,
+                end_date=end_date,
+                start_time=start_time,
+                end_time=end_time
+                )
+            return jsonify(analytics)
+
+        @app.route("/api/passenger_events")
+        def api_passenger_events():
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import request, jsonify
+            import sqlite3
+
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+            start_time = request.args.get("start_time")
+            end_time = request.args.get("end_time")
+            direction = request.args.get("direction")
+            stop_location = request.args.get("stop_location")
+
+            events = []
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+
+                query = """
+                    SELECT event_id, shuttle_id, timestamp, direction,
+                        passenger_count, available_seats, stop_location
+                    FROM passenger_events WHERE 1=1
+                """
+                params = []
+
+                if start_date:
+                    query += " AND timestamp >= ?"
+                    params.append(start_date)
+                if end_date:
+                    query += " AND timestamp <= ?"
+                    params.append(end_date + " 23:59:59")
+                if start_time:
+                    query += " AND strftime('%H:%M', timestamp) >= ?"
+                    params.append(start_time)
+                if end_time:
+                    query += " AND strftime('%H:%M', timestamp) <= ?"
+                    params.append(end_time)
+                if direction:
+                    query += " AND direction = ?"
+                    params.append(direction)
+                if stop_location:
+                    query += " AND stop_location = ?"
+                    params.append(stop_location)
+
+                query += " ORDER BY timestamp DESC"
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                for row in rows:
+                    events.append({
+                        "event_id": row[0],
+                        "shuttle_id": row[1],
+                        "timestamp": row[2],
+                        "direction": row[3],
+                        "passenger_count": row[4],
+                        "available_seats": row[5],
+                        "stop_location": row[6]
+                    })
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error fetching passenger events: {e}")
+
+            return jsonify({"events": events, "total": len(events)})
+
+

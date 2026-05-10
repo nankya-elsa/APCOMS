@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>APCOMS - Monitoring Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
       * {
         margin: 0;
@@ -108,10 +109,10 @@
         border-bottom: 2px solid #4f9ef7;
       }
 
-      /* CONTENT */
+      /* CONTENT - narrower for better breathing room */
       .content {
         padding: 30px;
-        max-width: 1400px;
+        max-width: 1200px;
         margin: 0 auto;
       }
 
@@ -309,11 +310,123 @@
       }
 
       /* ANALYTICS */
-      .analytics-grid {
+      .analytics-summary-grid {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(3, 1fr);
         gap: 16px;
         margin-bottom: 24px;
+      }
+
+      .analytics-filter-bar {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 18px 20px;
+        margin-bottom: 24px;
+        display: flex;
+        align-items: end;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      /* 2x2 chart grid */
+      .charts-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      .chart-panel {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 20px;
+      }
+
+      .chart-container {
+        position: relative;
+        height: 250px;
+      }
+
+      .chart-suggestion {
+        margin-top: 14px;
+        padding: 10px 14px;
+        background: rgba(79, 158, 247, 0.08);
+        border-left: 3px solid #4f9ef7;
+        border-radius: 4px;
+        font-size: 12px;
+        color: #d1d5db;
+        line-height: 1.5;
+      }
+
+      /* DATA PREVIEW TABLE */
+      .data-preview-panel {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 24px;
+      }
+
+      #data-preview-container {
+        max-height: 400px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #2a2d3a #1a1d27;
+      }
+
+      #data-preview-container::-webkit-scrollbar {
+        width: 6px;
+      }
+      #data-preview-container::-webkit-scrollbar-track {
+        background: #1a1d27;
+      }
+      #data-preview-container::-webkit-scrollbar-thumb {
+        background: #2a2d3a;
+        border-radius: 3px;
+      }
+
+      .preview-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .preview-table th {
+        text-align: left;
+        padding: 10px 12px;
+        color: #8b8fa8;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        border-bottom: 1px solid #2a2d3a;
+        background: #1a1d27;
+        position: sticky;
+        top: 0;
+      }
+
+      .preview-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #1f2230;
+        color: #d1d5db;
+      }
+
+      .direction-pill {
+        padding: 2px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .direction-boarding {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+      }
+
+      .direction-alighting {
+        background: rgba(234, 179, 8, 0.15);
+        color: #eab308;
       }
 
       /* EXPORT FORM */
@@ -367,6 +480,36 @@
 
       .btn-export:hover {
         background: #3d8de6;
+      }
+
+      .btn-apply {
+        padding: 9px 20px;
+        background: #22c55e;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .btn-apply:hover {
+        background: #16a34a;
+      }
+
+      .btn-clear {
+        padding: 9px 16px;
+        background: transparent;
+        border: 1px solid #2a2d3a;
+        border-radius: 6px;
+        color: #8b8fa8;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .btn-clear:hover {
+        background: #2a2d3a;
+        color: white;
       }
 
       /* SETTINGS */
@@ -753,49 +896,188 @@
 
       <!-- TAB 2: ANALYTICS -->
       <div id="tab-analytics" class="tab-content">
-        <!-- ANALYTICS CARDS -->
-        <div class="analytics-grid">
+        <!-- SUMMARY CARDS -->
+        <div class="analytics-summary-grid">
           <div class="card">
-            <div class="card-label">Boardings Today</div>
-            <div class="card-value blue">
-              {{ analytics.total_boardings_today }}
+            <div class="card-label">Total Boardings</div>
+            <div class="card-value blue" id="analytics-total-boardings">
+              {{ analytics.total_boardings }}
             </div>
+            <div class="card-sub">Since deployment</div>
           </div>
           <div class="card">
-            <div class="card-label">Alightings Today</div>
-            <div class="card-value blue">
-              {{ analytics.total_alightings_today }}
+            <div class="card-label">Average Occupancy</div>
+            <div
+              class="card-value"
+              style="color: #22c55e"
+              id="analytics-avg-occupancy"
+            >
+              {{ analytics.average_occupancy }}
             </div>
-          </div>
-          <div class="card">
-            <div class="card-label">Peak Hour</div>
-            <div class="card-value" style="font-size: 22px">
-              {{ analytics.peak_hour }}
-            </div>
+            <div class="card-sub">Passengers per event</div>
           </div>
           <div class="card">
             <div class="card-label">Most Popular Stop</div>
-            <div class="card-value" style="font-size: 16px">
+            <div
+              class="card-value"
+              style="font-size: 18px"
+              id="analytics-popular-stop"
+            >
               {{ analytics.most_popular_stop }}
+            </div>
+            <div class="card-sub">By boarding volume</div>
+          </div>
+        </div>
+
+        <!-- DATE & TIME RANGE FILTER -->
+        <div class="analytics-filter-bar">
+          <div class="filter-group" style="flex: 1; min-width: 180px">
+            <label>From</label>
+            <div style="display: flex; gap: 6px">
+              <input type="date" id="analytics-start" style="flex: 1" />
+              <input type="time" id="analytics-start-time" style="flex: 1" />
+            </div>
+          </div>
+          <div class="filter-group" style="flex: 1; min-width: 180px">
+            <label>To</label>
+            <div style="display: flex; gap: 6px">
+              <input type="date" id="analytics-end" style="flex: 1" />
+              <input type="time" id="analytics-end-time" style="flex: 1" />
+            </div>
+          </div>
+          <button class="btn-apply" onclick="applyAnalyticsFilter()">
+            Apply Filter
+          </button>
+          <button class="btn-clear" onclick="clearAnalyticsFilter()">
+            Clear
+          </button>
+          <span
+            id="filter-status"
+            style="
+              color: #8b8fa8;
+              font-size: 12px;
+              margin-left: 8px;
+              flex-basis: 100%;
+            "
+          >
+            Showing all data since deployment
+          </span>
+        </div>
+
+        <!-- 2x2 CHART GRID -->
+        <div class="charts-grid">
+          <!-- GRAPH 1: SHUTTLE ADOPTION -->
+          <div class="chart-panel">
+            <div class="panel-title">Shuttle Adoption Over Time</div>
+            <div class="chart-container">
+              <canvas id="adoption-chart"></canvas>
+            </div>
+            <div class="chart-suggestion" id="adoption-suggestion">
+              Tracking daily boarding trends since deployment.
+            </div>
+          </div>
+
+          <!-- GRAPH 2: PEAK HOURS -->
+          <div class="chart-panel">
+            <div class="panel-title">Peak Hours Analysis</div>
+            <div class="chart-container">
+              <canvas id="peak-hours-chart"></canvas>
+            </div>
+            <div class="chart-suggestion" id="peak-hours-suggestion">
+              Red bars = peak demand hours. Blue bars = low demand windows ideal
+              for charging.
+            </div>
+          </div>
+
+          <!-- GRAPH 3: STOP POPULARITY -->
+          <div class="chart-panel">
+            <div class="panel-title">Stop Popularity Ranking</div>
+            <div class="chart-container">
+              <canvas id="stop-popularity-chart"></canvas>
+            </div>
+            <div class="chart-suggestion" id="stop-popularity-suggestion">
+              Stops ranked by boarding volume to inform route optimization.
+            </div>
+          </div>
+
+          <!-- GRAPH 4: DAY OF WEEK -->
+          <div class="chart-panel">
+            <div class="panel-title">Day of Week Pattern</div>
+            <div class="chart-container">
+              <canvas id="day-of-week-chart"></canvas>
+            </div>
+            <div class="chart-suggestion" id="day-of-week-suggestion">
+              Boardings by weekday, informs weekly schedule planning.
             </div>
           </div>
         </div>
 
-        <!-- EXPORT PANEL -->
-        <div class="export-panel">
-          <div class="panel-title">Export Passenger Data</div>
-          <div class="filter-row">
+        <!-- DATA PREVIEW + EXPORT -->
+        <div class="data-preview-panel">
+          <div class="panel-title">
+            Passenger Events Data
+            <span
+              id="preview-count"
+              style="
+                float: right;
+                color: #8b8fa8;
+                font-size: 11px;
+                font-weight: 400;
+                text-transform: none;
+                letter-spacing: 0;
+              "
+            >
+              Loading...
+            </span>
+          </div>
+
+          <!-- FILTER ROW -->
+          <div
+            style="
+              display: grid;
+              grid-template-columns: 1.5fr 1.5fr 1fr 1fr auto;
+              gap: 12px;
+              margin-bottom: 16px;
+              align-items: end;
+            "
+          >
             <div class="filter-group">
-              <label>From Date</label>
-              <input type="date" id="start-date" />
+              <label>From</label>
+              <div style="display: flex; gap: 6px">
+                <input
+                  type="date"
+                  id="start-date"
+                  onchange="refreshPreview()"
+                  style="flex: 1"
+                />
+                <input
+                  type="time"
+                  id="start-time"
+                  onchange="refreshPreview()"
+                  style="flex: 1"
+                />
+              </div>
             </div>
             <div class="filter-group">
-              <label>To Date</label>
-              <input type="date" id="end-date" />
+              <label>To</label>
+              <div style="display: flex; gap: 6px">
+                <input
+                  type="date"
+                  id="end-date"
+                  onchange="refreshPreview()"
+                  style="flex: 1"
+                />
+                <input
+                  type="time"
+                  id="end-time"
+                  onchange="refreshPreview()"
+                  style="flex: 1"
+                />
+              </div>
             </div>
             <div class="filter-group">
               <label>Direction</label>
-              <select id="direction">
+              <select id="direction" onchange="refreshPreview()">
                 <option value="">All</option>
                 <option value="boarding">Boarding</option>
                 <option value="alighting">Alighting</option>
@@ -803,15 +1085,38 @@
             </div>
             <div class="filter-group">
               <label>Stop Location</label>
-              <input
-                type="text"
-                id="stop-location"
-                placeholder="e.g. Western Gate"
-              />
+              <select id="stop-location" onchange="refreshPreview()">
+                <option value="">All Stops</option>
+                {% for stop in stops %}
+                <option value="{{ stop }}">{{ stop }}</option>
+                {% endfor %}
+              </select>
             </div>
             <button class="btn-export" onclick="exportData()">
               Export CSV
             </button>
+          </div>
+
+          <!-- DATA TABLE -->
+          <div id="data-preview-container">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Direction</th>
+                  <th>Onboard</th>
+                  <th>Available</th>
+                  <th>Stop</th>
+                </tr>
+              </thead>
+              <tbody id="preview-tbody">
+                <tr>
+                  <td colspan="5" style="text-align: center; color: #8b8fa8">
+                    Loading events...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -884,6 +1189,12 @@
     </div>
 
     <script>
+      // chart instances we keep around so we can destroy and re-create them on filter
+      let adoptionChartInstance = null;
+      let peakHoursChartInstance = null;
+      let stopPopularityChartInstance = null;
+      let dayOfWeekChartInstance = null;
+
       // TAB SWITCHING
       function switchTab(tab) {
         document
@@ -894,16 +1205,20 @@
           .forEach((b) => b.classList.remove("active"));
         document.getElementById("tab-" + tab).classList.add("active");
         event.target.classList.add("active");
+
+        if (tab === "analytics") {
+          loadAnalytics();
+          refreshPreview();
+        }
       }
 
-      // AUTO REFRESH every 5 seconds - targeted AJAX updates
+      // AUTO REFRESH every 5 seconds for monitoring tab
       setInterval(function () {
         fetch("/api/status")
           .then((r) => r.json())
           .then((data) => {
             if (!data.occupancy) return;
 
-            // occupancy cards
             document.getElementById("passenger-count").textContent =
               data.occupancy.current_count;
             const seatsEl = document.getElementById("available-seats");
@@ -917,7 +1232,6 @@
             document.getElementById("last-updated").textContent =
               "Last updated: " + data.occupancy.last_updated;
 
-            // occupancy status badge
             const status = data.occupancy.occupancy_status;
             let badgeClass = "status-active";
             let badgeText = "Available";
@@ -931,7 +1245,6 @@
             document.getElementById("occupancy-status").innerHTML =
               `<span class="status-badge ${badgeClass}">${badgeText}</span>`;
 
-            // system status badge
             const sys = data.system_status.system_status;
             let sysBadge = `<span class="status-badge status-warning">${sys}</span>`;
             if (sys === "Active")
@@ -944,7 +1257,6 @@
               sysBadge = `<span class="status-badge status-offline">Offline</span>`;
             document.getElementById("system-status-val").innerHTML = sysBadge;
 
-            // camera status badge
             const cam = data.system_status.camera_status;
             let camBadge = `<span class="status-badge status-warning">Unknown</span>`;
             if (cam === "ok")
@@ -953,13 +1265,11 @@
               camBadge = `<span class="status-badge status-error">Error</span>`;
             document.getElementById("camera-status-val").innerHTML = camBadge;
 
-            // FPS and latency
             document.getElementById("fps-val").textContent =
               data.system_status.fps + " FPS";
             document.getElementById("latency-val").textContent =
               data.system_status.latency_ms + " ms";
 
-            // today's summary bar
             document.getElementById("summary-boardings").textContent =
               data.today_summary.boardings;
             document.getElementById("summary-alightings").textContent =
@@ -969,16 +1279,11 @@
             document.getElementById("summary-stop").textContent =
               data.today_summary.most_active_stop;
 
-            // diagnostic logs
             const logsPanel = document.getElementById("diagnostic-logs-panel");
             if (data.diagnostic_logs && data.diagnostic_logs.length > 0) {
               let html = `<table class="logs-table"><thead><tr><th>Time</th><th>Type</th><th>Message</th></tr></thead><tbody>`;
               data.diagnostic_logs.forEach((log) => {
-                html += `<tr>
-                  <td>${log.timestamp}</td>
-                  <td><span class="log-type log-${log.log_type}">${log.log_type}</span></td>
-                  <td>${log.message}</td>
-                </tr>`;
+                html += `<tr><td>${log.timestamp}</td><td><span class="log-type log-${log.log_type}">${log.log_type}</span></td><td>${log.message}</td></tr>`;
               });
               html += `</tbody></table>`;
               logsPanel.innerHTML = html;
@@ -989,16 +1294,401 @@
           .catch((err) => console.log("Refresh error:", err));
       }, 5000);
 
-      // EXPORT DATA
+      // ANALYTICS - LOAD AND RENDER CHARTS
+      function loadAnalytics(
+        startDate = null,
+        endDate = null,
+        startTime = null,
+        endTime = null,
+      ) {
+        let url = "/api/analytics";
+        const params = [];
+        if (startDate) params.push("start_date=" + startDate);
+        if (endDate) params.push("end_date=" + endDate);
+        if (startTime) params.push("start_time=" + startTime);
+        if (endTime) params.push("end_time=" + endTime);
+        if (params.length) url += "?" + params.join("&");
+
+        fetch(url)
+          .then((r) => r.json())
+          .then((data) => {
+            document.getElementById("analytics-total-boardings").textContent =
+              data.total_boardings;
+            document.getElementById("analytics-avg-occupancy").textContent =
+              data.average_occupancy;
+            document.getElementById("analytics-popular-stop").textContent =
+              data.most_popular_stop;
+
+            updateSuggestions(data);
+            renderAdoptionChart(data.adoption_data);
+            renderPeakHoursChart(data.peak_hours_data);
+            renderStopPopularityChart(data.stop_popularity_data);
+            renderDayOfWeekChart(data.day_of_week_data);
+          })
+          .catch((err) => console.log("Analytics load error:", err));
+      }
+
+      function applyAnalyticsFilter() {
+        const start = document.getElementById("analytics-start").value;
+        const end = document.getElementById("analytics-end").value;
+        const startTime = document.getElementById("analytics-start-time").value;
+        const endTime = document.getElementById("analytics-end-time").value;
+        const status = document.getElementById("filter-status");
+
+        let parts = [];
+        if (start || end)
+          parts.push(`${start || "beginning"} to ${end || "today"}`);
+        if (startTime || endTime)
+          parts.push(`${startTime || "00:00"}–${endTime || "23:59"} daily`);
+
+        if (parts.length > 0) {
+          status.textContent = "Showing data: " + parts.join(", ");
+        } else {
+          status.textContent = "Showing all data since deployment";
+        }
+
+        loadAnalytics(start, end, startTime, endTime);
+      }
+
+      function clearAnalyticsFilter() {
+        document.getElementById("analytics-start").value = "";
+        document.getElementById("analytics-end").value = "";
+        document.getElementById("analytics-start-time").value = "";
+        document.getElementById("analytics-end-time").value = "";
+        document.getElementById("filter-status").textContent =
+          "Showing all data since deployment";
+        loadAnalytics();
+      }
+
+      // SMART SUGGESTIONS - concise insight + recommendation
+      function updateSuggestions(data) {
+        // peak hours - fact + actionable insight
+        const hours = data.peak_hours_data.values;
+        const labels = data.peak_hours_data.labels;
+        if (hours.length > 0 && Math.max(...hours) > 0) {
+          const max = Math.max(...hours);
+          const peakIdx = hours.indexOf(max);
+          const peakHour = labels[peakIdx];
+          // find quietest hour (with at least 0)
+          const nonZero = hours.filter((v) => v > 0);
+          const total = hours.reduce((a, b) => a + b, 0);
+          const peakPct = total > 0 ? Math.round((max / total) * 100) : 0;
+
+          if (nonZero.length > 1) {
+            const minVal = Math.min(...nonZero);
+            const quietIdx = hours.indexOf(minVal);
+            const quietHour = labels[quietIdx];
+            document.getElementById("peak-hours-suggestion").innerHTML =
+              `🔴 Peak: <strong>${peakHour}</strong> (${peakPct}% of daily volume) — ensure shuttle availability. ` +
+              `🔵 Quietest: <strong>${quietHour}</strong> — ideal for charging or maintenance.`;
+          } else {
+            document.getElementById("peak-hours-suggestion").innerHTML =
+              `🔴 All boardings concentrated at <strong>${peakHour}</strong>.`;
+          }
+        } else {
+          document.getElementById("peak-hours-suggestion").innerHTML =
+            `No boardings in the selected window.`;
+        }
+
+        // stop popularity - top stop + percentage + recommendation
+        const stops = data.stop_popularity_data.labels;
+        const stopValues = data.stop_popularity_data.values;
+        if (stops.length > 0) {
+          const total = stopValues.reduce((a, b) => a + b, 0);
+          const topPct =
+            total > 0 ? Math.round((stopValues[0] / total) * 100) : 0;
+          let suggestion = `<strong>${stops[0]}</strong> handles ${topPct}% of all boardings`;
+          if (stops.length > 1) {
+            const bottom = stops[stops.length - 1];
+            suggestion += ` — consider extending dwell time here. <strong>${bottom}</strong> is least used; review route necessity.`;
+          } else {
+            suggestion += `.`;
+          }
+          document.getElementById("stop-popularity-suggestion").innerHTML =
+            suggestion;
+        } else {
+          document.getElementById("stop-popularity-suggestion").innerHTML =
+            `No stop activity in the selected window.`;
+        }
+
+        // adoption trend - growth percentage + projection
+        const days = data.adoption_data.values;
+        if (days.length >= 2) {
+          const recent = days[days.length - 1];
+          const first = days[0];
+          if (first > 0) {
+            const growth = Math.round(((recent - first) / first) * 100);
+            if (growth > 10) {
+              document.getElementById("adoption-suggestion").innerHTML =
+                `📈 Strong growth: <strong>+${growth}%</strong> (${first} → ${recent} daily). Plan for capacity expansion.`;
+            } else if (growth < -10) {
+              document.getElementById("adoption-suggestion").innerHTML =
+                `📉 Adoption declined <strong>${growth}%</strong> (${first} → ${recent}). Investigate possible causes.`;
+            } else {
+              document.getElementById("adoption-suggestion").innerHTML =
+                `Adoption is steady at ~<strong>${recent}</strong> daily boardings.`;
+            }
+          } else {
+            document.getElementById("adoption-suggestion").innerHTML =
+              `Adoption is starting to build, more data needed for trends.`;
+          }
+        } else if (days.length === 1) {
+          document.getElementById("adoption-suggestion").innerHTML =
+            `<strong>${days[0]}</strong> boardings recorded, more data needed to detect a trend.`;
+        } else {
+          document.getElementById("adoption-suggestion").innerHTML =
+            `No daily data in the selected window.`;
+        }
+
+        // day of week - busiest weekday + weekend comparison
+        const dows = data.day_of_week_data.values;
+        const dowLabels = data.day_of_week_data.labels;
+        if (dows.length > 0 && Math.max(...dows) > 0) {
+          const maxDow = Math.max(...dows);
+          const peakDayIdx = dows.indexOf(maxDow);
+          const peakDay = dowLabels[peakDayIdx];
+          // weekend = Sat (idx 5) + Sun (idx 6), weekday = Mon-Fri (0-4)
+          const weekdayTotal = dows.slice(0, 5).reduce((a, b) => a + b, 0);
+          const weekendTotal = dows.slice(5, 7).reduce((a, b) => a + b, 0);
+          const weekdayAvg = weekdayTotal / 5;
+          const weekendAvg = weekendTotal / 2;
+          let suggestion = `<strong>${peakDay}</strong> is busiest with ${maxDow} boardings.`;
+          if (weekdayAvg > 0 && weekendAvg < weekdayAvg * 0.5) {
+            const ratio = Math.round((weekendAvg / weekdayAvg) * 100);
+            suggestion += ` Weekends only ${ratio}% of weekday volume — consider reduced weekend service.`;
+          }
+          document.getElementById("day-of-week-suggestion").innerHTML =
+            suggestion;
+        } else {
+          document.getElementById("day-of-week-suggestion").innerHTML =
+            `No weekday activity in the selected window.`;
+        }
+      }
+
+      function renderAdoptionChart(adoptionData) {
+        const ctx = document.getElementById("adoption-chart").getContext("2d");
+        if (adoptionChartInstance) adoptionChartInstance.destroy();
+        adoptionChartInstance = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: adoptionData.labels,
+            datasets: [
+              {
+                label: "Boardings",
+                data: adoptionData.values,
+                borderColor: "#4f9ef7",
+                backgroundColor: "rgba(79, 158, 247, 0.1)",
+                borderWidth: 2,
+                tension: 0.3,
+                fill: true,
+                pointBackgroundColor: "#4f9ef7",
+                pointRadius: 4,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: "#d1d5db" } } },
+            scales: {
+              x: { ticks: { color: "#8b8fa8" }, grid: { color: "#1f2230" } },
+              y: {
+                ticks: { color: "#8b8fa8" },
+                grid: { color: "#1f2230" },
+                beginAtZero: true,
+              },
+            },
+          },
+        });
+      }
+
+      function renderPeakHoursChart(peakData) {
+        const ctx = document
+          .getElementById("peak-hours-chart")
+          .getContext("2d");
+        if (peakHoursChartInstance) peakHoursChartInstance.destroy();
+        const values = peakData.values;
+        const max = Math.max(...values);
+        const peakThreshold = max * 0.6;
+        const lowThreshold = max * 0.2;
+        const colors = values.map((v) => {
+          if (v >= peakThreshold && v > 0) return "#ef4444";
+          if (v <= lowThreshold) return "#4f9ef7";
+          return "#8b8fa8";
+        });
+        peakHoursChartInstance = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: peakData.labels,
+            datasets: [
+              {
+                label: "Boardings",
+                data: peakData.values,
+                backgroundColor: colors,
+                borderColor: colors,
+                borderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: "#8b8fa8" }, grid: { color: "#1f2230" } },
+              y: {
+                ticks: { color: "#8b8fa8" },
+                grid: { color: "#1f2230" },
+                beginAtZero: true,
+              },
+            },
+          },
+        });
+      }
+
+      function renderStopPopularityChart(stopData) {
+        const ctx = document
+          .getElementById("stop-popularity-chart")
+          .getContext("2d");
+        if (stopPopularityChartInstance) stopPopularityChartInstance.destroy();
+        stopPopularityChartInstance = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: stopData.labels,
+            datasets: [
+              {
+                label: "Boardings",
+                data: stopData.values,
+                backgroundColor: "#22c55e",
+                borderColor: "#16a34a",
+                borderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: {
+                ticks: { color: "#8b8fa8" },
+                grid: { color: "#1f2230" },
+                beginAtZero: true,
+              },
+              y: { ticks: { color: "#8b8fa8" }, grid: { color: "#1f2230" } },
+            },
+          },
+        });
+      }
+
+      function renderDayOfWeekChart(dayData) {
+        const ctx = document
+          .getElementById("day-of-week-chart")
+          .getContext("2d");
+        if (dayOfWeekChartInstance) dayOfWeekChartInstance.destroy();
+        // weekend lighter, weekday brighter
+        const colors = dayData.labels.map((day) => {
+          if (day === "Saturday" || day === "Sunday") return "#8b8fa8";
+          return "#a855f7";
+        });
+        dayOfWeekChartInstance = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: dayData.labels,
+            datasets: [
+              {
+                label: "Boardings",
+                data: dayData.values,
+                backgroundColor: colors,
+                borderColor: colors,
+                borderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: "#8b8fa8" }, grid: { color: "#1f2230" } },
+              y: {
+                ticks: { color: "#8b8fa8" },
+                grid: { color: "#1f2230" },
+                beginAtZero: true,
+              },
+            },
+          },
+        });
+      }
+
+      // DATA PREVIEW TABLE - fetches from /api/passenger_events with current filters
+      function refreshPreview() {
+        const start = document.getElementById("start-date").value;
+        const end = document.getElementById("end-date").value;
+        const startTime = document.getElementById("start-time").value;
+        const endTime = document.getElementById("end-time").value;
+        const direction = document.getElementById("direction").value;
+        const stop = document.getElementById("stop-location").value;
+
+        let url = "/api/passenger_events?";
+        if (start) url += "start_date=" + start + "&";
+        if (end) url += "end_date=" + end + "&";
+        if (startTime) url += "start_time=" + startTime + "&";
+        if (endTime) url += "end_time=" + endTime + "&";
+        if (direction) url += "direction=" + direction + "&";
+        if (stop) url += "stop_location=" + encodeURIComponent(stop) + "&";
+
+        fetch(url)
+          .then((r) => r.json())
+          .then((data) => {
+            const tbody = document.getElementById("preview-tbody");
+            const countEl = document.getElementById("preview-count");
+
+            countEl.textContent = `${data.total} event${data.total === 1 ? "" : "s"}`;
+
+            if (!data.events || data.events.length === 0) {
+              tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #8b8fa8;">No events match the current filters.</td></tr>`;
+              return;
+            }
+
+            let html = "";
+            data.events.forEach((ev) => {
+              const dirClass =
+                ev.direction === "boarding"
+                  ? "direction-boarding"
+                  : "direction-alighting";
+              html += `<tr>
+                <td>${ev.timestamp}</td>
+                <td><span class="direction-pill ${dirClass}">${ev.direction}</span></td>
+                <td>${ev.passenger_count}</td>
+                <td>${ev.available_seats}</td>
+                <td>${ev.stop_location}</td>
+              </tr>`;
+            });
+            tbody.innerHTML = html;
+          })
+          .catch((err) => {
+            console.log("Preview load error:", err);
+            document.getElementById("preview-tbody").innerHTML =
+              `<tr><td colspan="5" style="text-align: center; color: #ef4444;">Error loading events.</td></tr>`;
+          });
+      }
+
+      // EXPORT DATA - uses the same filters as the preview table
       function exportData() {
         const start = document.getElementById("start-date").value;
         const end = document.getElementById("end-date").value;
+        const startTime = document.getElementById("start-time").value;
+        const endTime = document.getElementById("end-time").value;
         const direction = document.getElementById("direction").value;
         const stop = document.getElementById("stop-location").value;
 
         let url = "/export?";
         if (start) url += "start_date=" + start + "&";
         if (end) url += "end_date=" + end + "&";
+        if (startTime) url += "start_time=" + startTime + "&";
+        if (endTime) url += "end_time=" + endTime + "&";
         if (direction) url += "direction=" + direction + "&";
         if (stop) url += "stop_location=" + encodeURIComponent(stop) + "&";
 
