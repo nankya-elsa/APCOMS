@@ -352,13 +352,13 @@ class FlaskDashboard:
         import sqlite3
 
         total_boardings = 0
-        total_alightings_today = 0
         peak_hour = "N/A"
         most_popular_stop = "N/A"
         average_occupancy = 0.0
         adoption_data = {"labels": [], "values": []}
         peak_hours_data = {"labels": [], "values": []}
         stop_popularity_data = {"labels": [], "values": []}
+        day_of_week_data = {"labels": [], "values": []}
 
         try:
             conn = sqlite3.connect("local_database/apcoms.db")
@@ -455,7 +455,6 @@ class FlaskDashboard:
                 stop_popularity_data["values"].append(count)
 
             # Graph 4: Day-of-Week Pattern (boardings per weekday)
-            day_of_week_data = {"labels": [], "values": []}
             weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
             weekday_counts = {name: 0 for name in weekday_names}
 
