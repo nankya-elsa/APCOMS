@@ -46,7 +46,8 @@ class DefaultFirebaseOptions {
     messagingSenderId: '605657235035',
     projectId: 'shuttleapp-260f8',
     authDomain: 'shuttleapp-260f8.firebaseapp.com',
-    databaseURL: 'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
+    databaseURL:
+        'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'shuttleapp-260f8.firebasestorage.app',
   );
 
@@ -55,7 +56,8 @@ class DefaultFirebaseOptions {
     appId: '1:605657235035:android:b6fb1eb2848bc21658897e',
     messagingSenderId: '605657235035',
     projectId: 'shuttleapp-260f8',
-    databaseURL: 'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
+    databaseURL:
+        'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'shuttleapp-260f8.firebasestorage.app',
   );
 
@@ -64,7 +66,8 @@ class DefaultFirebaseOptions {
     appId: '1:605657235035:ios:18e9ffca5ec9fd9358897e',
     messagingSenderId: '605657235035',
     projectId: 'shuttleapp-260f8',
-    databaseURL: 'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
+    databaseURL:
+        'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'shuttleapp-260f8.firebasestorage.app',
     iosBundleId: 'com.example.shuttlego',
   );
@@ -74,7 +77,8 @@ class DefaultFirebaseOptions {
     appId: '1:605657235035:ios:18e9ffca5ec9fd9358897e',
     messagingSenderId: '605657235035',
     projectId: 'shuttleapp-260f8',
-    databaseURL: 'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
+    databaseURL:
+        'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'shuttleapp-260f8.firebasestorage.app',
     iosBundleId: 'com.example.shuttlego',
   );
@@ -85,7 +89,8 @@ class DefaultFirebaseOptions {
     messagingSenderId: '605657235035',
     projectId: 'shuttleapp-260f8',
     authDomain: 'shuttleapp-260f8.firebaseapp.com',
-    databaseURL: 'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
+    databaseURL:
+        'https://shuttleapp-260f8-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'shuttleapp-260f8.firebasestorage.app',
   );
 }

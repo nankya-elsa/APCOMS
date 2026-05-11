@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../../models/booking_availability.dart';
 import '../../models/user_profile.dart';
+import '../../models/booking_record.dart';
 import '../../services/auth_service.dart';
 import '../../services/booking_service.dart';
+import '../my_bookings_screen.dart';
 import '../booking_screen.dart';
 
 class DashboardHomeTab extends StatelessWidget {
@@ -35,47 +37,67 @@ class DashboardHomeTab extends StatelessWidget {
           nameFallback: nameText,
         );
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-          children: [
-            Row(
-              children: [
-                avatar,
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        greeting,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodySmall?.copyWith(color: Colors.black54),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        nameText,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                    ],
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: IntrinsicHeight(
+                  child: Padding(
+                    // Add a bit more top spacing so greeting isn't flush to the
+                    // top edge, without pushing the booking card to the bottom.
+                    padding: const EdgeInsets.fromLTRB(16, 36, 16, 16),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            avatar,
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    greeting,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    nameText,
+                                    style: Theme.of(context).textTheme.titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (role.isNotEmpty) _RolePill(role: role),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _ShuttleCard(trackedShuttleKey: trackedShuttleKey),
+                        const SizedBox(height: 14),
+                        Text(
+                          'Booking',
+                          style: Theme.of(
+                            context,
+                          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        _BookingEntryCard(
+                          trackedShuttleKey: trackedShuttleKey,
+                          uid: uid,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                if (role.isNotEmpty) _RolePill(role: role),
-              ],
-            ),
-            const SizedBox(height: 14),
-            _ShuttleCard(trackedShuttleKey: trackedShuttleKey),
-            const SizedBox(height: 14),
-            Text(
-              'Booking',
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            _BookingEntryCard(trackedShuttleKey: trackedShuttleKey),
-          ],
+              ),
+            );
+          },
         );
       },
     );
@@ -461,90 +483,107 @@ class _CardLoading extends StatelessWidget {
 }
 
 class _BookingEntryCard extends StatelessWidget {
-  const _BookingEntryCard({required this.trackedShuttleKey});
+  const _BookingEntryCard({required this.trackedShuttleKey, required this.uid});
 
   final String trackedShuttleKey;
+  final String uid;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
-    void goToBooking() {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => BookingScreen(trackedShuttleKey: trackedShuttleKey),
-        ),
-      );
-    }
+    return StreamBuilder<List<BookingRecord>>(
+      stream: BookingService().watchUserBookings(userUid: uid),
+      builder: (context, snapshot) {
+        final hasActive = snapshot.data?.any((b) => b.isActive) ?? false;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: goToBooking,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              scheme.primaryContainer.withValues(alpha: 0.12),
-              Colors.white,
+        void action() {
+          if (hasActive) {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => MyBookingsScreen()),
+            );
+            return;
+          }
+
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => BookingScreen(trackedShuttleKey: trackedShuttleKey),
             ),
+          );
+        }
+
+        final buttonLabel = hasActive ? 'View Booking' : 'Book Now';
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: action,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.22),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Color.alphaBlend(
+                  scheme.primaryContainer.withValues(alpha: 0.12),
+                  Colors.white,
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.22),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Color.alphaBlend(
-                        scheme.primaryContainer.withValues(alpha: 0.55),
-                        Colors.white,
+                  Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: Color.alphaBlend(
+                            scheme.primaryContainer.withValues(alpha: 0.55),
+                            Colors.white,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.event_seat, color: scheme.primary),
                       ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(Icons.event_seat, color: scheme.primary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              hasActive ? 'You have an active booking' : 'Book a seat',
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              hasActive ? 'Cancel or complete it to make a new booking' : 'Choose pick up and destination',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Book a seat',
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Choose pick up and destination',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ],
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: FilledButton(
+                      onPressed: action,
+                      child: Text(buttonLabel),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                height: 44,
-                child: FilledButton(
-                  onPressed: goToBooking,
-                  child: const Text('Book Now'),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

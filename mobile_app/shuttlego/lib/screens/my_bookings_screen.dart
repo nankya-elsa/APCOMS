@@ -133,7 +133,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.check_circle, color: scheme.primary),
+                        Icon(Icons.school, color: scheme.primary),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
