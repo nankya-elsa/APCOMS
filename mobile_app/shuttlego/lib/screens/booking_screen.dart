@@ -382,9 +382,9 @@ class _BookingHistoryTile extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${booking.pickupStop} to ${booking.destinationStop}',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
               Text(
@@ -401,17 +401,17 @@ class _BookingHistoryTile extends StatelessWidget {
             'Ticket: ${booking.bookingId}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
           if ((booking.cancelReason ?? '').isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
               'Reason: ${booking.cancelReason}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
           const SizedBox(height: 10),
@@ -441,10 +441,7 @@ class _BookingHistoryTile extends StatelessWidget {
               ),
               const Spacer(),
               if (onCancel != null)
-                TextButton(
-                  onPressed: onCancel,
-                  child: const Text('Cancel'),
-                ),
+                TextButton(onPressed: onCancel, child: const Text('Cancel')),
             ],
           ),
         ],
@@ -482,9 +479,9 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
           children: [
             Text(
               'Cancel booking',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(

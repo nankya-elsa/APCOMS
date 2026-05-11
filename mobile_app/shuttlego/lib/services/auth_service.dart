@@ -5,9 +5,8 @@ import '../models/user_profile.dart';
 
 class AuthService {
   const AuthService({FirebaseAuth? auth, FirebaseDatabase? database})
-    : this._internal(auth: auth, database: database);
-
-  const AuthService._internal({this._auth, this._database});
+    : _auth = auth,
+      _database = database;
 
   final FirebaseAuth? _auth;
   final FirebaseDatabase? _database;
@@ -101,6 +100,41 @@ class AuthService {
         code: 'profile-write-failed',
         message: message,
       );
+    }
+  }
+
+  /// Update fields on an existing user profile at `users/{uid}`.
+  Future<void> updateUserProfile({
+    required String uid,
+    String? fullName,
+    String? role,
+    String? roleNumber,
+    String? email,
+  }) async {
+    final updates = <String, Object?>{};
+    if (fullName != null) updates['fullName'] = fullName.trim();
+    if (role != null) updates['role'] = role.trim();
+    if (roleNumber != null) updates['roleNumber'] = roleNumber.trim();
+    if (email != null) updates['email'] = email.trim();
+
+    if (updates.isEmpty) return;
+
+    await _usersRef.child(uid).update(updates);
+
+    // Optionally update FirebaseAuth profile email/displayName when
+    // appropriate (best-effort; ignore failures here).
+    try {
+      final current = auth.currentUser;
+      if (current != null) {
+        if (email != null && email.trim().isNotEmpty && current.email != email.trim()) {
+          await current.updateEmail(email.trim());
+        }
+        if (fullName != null && fullName.trim().isNotEmpty && current.displayName != fullName.trim()) {
+          await current.updateDisplayName(fullName.trim());
+        }
+      }
+    } catch (_) {
+      // Ignore - database was updated and that's the source of truth for profile.
     }
   }
 }

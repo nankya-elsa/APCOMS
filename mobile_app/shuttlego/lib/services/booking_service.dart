@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -77,6 +78,67 @@ class BookingService {
     };
 
     return controller.stream;
+  }
+
+  /// Generate a short random token to embed in the QR and store with the
+  /// booking. This helps prevent trivial guessing of booking IDs.
+  static String _generateQrToken([int length = 16]) {
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    final rnd = Random.secure();
+    final buffer = StringBuffer();
+    for (var i = 0; i < length; i++) {
+      buffer.write(chars[rnd.nextInt(chars.length)]);
+    }
+    return buffer.toString();
+  }
+
+  /// Validate a scanned QR payload and, if valid, mark the booking as
+  /// completed. Expects the payload produced in [createBooking].
+  Future<void> completeBookingFromQr({required String qrPayload}) async {
+    Object? raw;
+    try {
+      raw = jsonDecode(qrPayload);
+    } catch (e) {
+      throw BookingException('Invalid QR payload');
+    }
+
+    if (raw is! Map) throw BookingException('Invalid QR payload');
+    final map = Map<String, Object?>.from(raw);
+    final version = map['v'] is int
+        ? (map['v'] as int)
+        : int.tryParse('${map['v']}');
+    if (version == null || version != 1) {
+      throw BookingException('Unsupported QR version');
+    }
+
+    final bookingId = map['bookingId'] as String?;
+    final token = map['t'] as String?;
+    if (bookingId == null || token == null) {
+      throw BookingException('Missing booking data in QR');
+    }
+
+    final snap = await _database.ref().child('bookings').child(bookingId).get();
+    final data = snap.value;
+    if (data is! Map) throw BookingException('Booking not found');
+    final db = Map<String, Object?>.from(data);
+
+    final storedToken = db['qr_token'] as String?;
+    final status = ((db['status'] as String?) ?? '').trim().toLowerCase();
+    if (status != 'reserved') throw BookingException('Booking not active');
+    if (storedToken == null || storedToken != token) {
+      throw BookingException('Invalid QR token');
+    }
+
+    final userUid = db['user_uid'] as String?;
+    await _database.ref().update(<String, Object?>{
+      'bookings/$bookingId/status': 'completed',
+      'bookings/$bookingId/completed_at': ServerValue.timestamp,
+      if (userUid != null)
+        'user_bookings/$userUid/$bookingId/status': 'completed',
+      if (userUid != null)
+        'user_bookings/$userUid/$bookingId/completed_at': ServerValue.timestamp,
+    });
   }
 
   static int _countActiveReservations(Object? raw) {
@@ -160,6 +222,15 @@ class BookingService {
     required String destinationStop,
     required int destinationIndex,
   }) async {
+    // Prevent users from creating a second active reservation while one
+    // already exists for them.
+    final hasActiveUserBooking = await _hasActiveUserBooking(userUid);
+    if (hasActiveUserBooking) {
+      throw BookingException(
+        'You already have an active booking. Cancel or complete it before creating another.',
+      );
+    }
+
     final shuttleRef = _database.ref().child('shuttles').child(shuttleKey);
     final bookingsRef = _database.ref().child('bookings');
     final bookingKey = bookingsRef.push().key;
@@ -179,13 +250,12 @@ class BookingService {
       throw BookingException('No free seats available for this shuttle.');
     }
 
+    final qrToken = _generateQrToken();
+
     final qrPayload = jsonEncode({
       'v': 1,
       'bookingId': bookingKey,
-      'shuttleKey': shuttleKey,
-      'userUid': userUid,
-      'pickupIndex': pickupIndex,
-      'destinationIndex': destinationIndex,
+      't': qrToken,
     });
 
     final bookingData = <String, Object?>{
@@ -198,6 +268,7 @@ class BookingService {
       'destination_index': destinationIndex,
       'status': 'reserved',
       'qr_payload': qrPayload,
+      'qr_token': qrToken,
       'created_at': ServerValue.timestamp,
     };
 
@@ -262,6 +333,39 @@ class BookingService {
         .get();
 
     return _countActiveReservations(snapshot.value);
+  }
+
+  Future<bool> _hasActiveUserBooking(String userUid) async {
+    // Query the user's bookings for any entry with status == 'reserved'.
+    try {
+      final snapshot = await _database
+          .ref()
+          .child('user_bookings')
+          .child(userUid)
+          .orderByChild('status')
+          .equalTo('reserved')
+          .get();
+
+      final val = snapshot.value;
+      if (val == null) return false;
+      if (val is Map) return _countActiveReservations(val) > 0;
+      if (val is List) {
+        for (final v in val) {
+          if (v is Map) {
+            final status = ((v['status'] as String?) ?? '')
+                .trim()
+                .toLowerCase();
+            if (status == 'reserved') return true;
+          }
+        }
+      }
+    } catch (_) {
+      // On error, be conservative and assume no active booking so callers
+      // can surface a clearer error from the DB update if necessary.
+      return false;
+    }
+
+    return false;
   }
 
   static int _readInt(Object? value) {

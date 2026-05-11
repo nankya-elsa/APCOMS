@@ -7,29 +7,32 @@ import 'screens/auth_gate.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
-  await runZonedGuarded<Future<void>>(() async {
-    WidgetsFlutterBinding.ensureInitialized();
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+  await runZonedGuarded<Future<void>>(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
 
-    FlutterError.onError = (details) {
-      // Preserve default behavior
-      FlutterError.presentError(details);
-      // Print the error and stack for diagnostics
+      FlutterError.onError = (details) {
+        // Preserve default behavior
+        FlutterError.presentError(details);
+        // Print the error and stack for diagnostics
+        try {
+          debugPrint('FlutterError: ${details.exceptionAsString()}');
+          debugPrint(details.stack?.toString() ?? '<no stack>');
+        } catch (_) {}
+      };
+
+      runApp(const MainApp());
+    },
+    (error, stack) {
       try {
-        debugPrint('FlutterError: ${details.exceptionAsString()}');
-        debugPrint(details.stack?.toString() ?? '<no stack>');
+        debugPrint('Uncaught zone error: $error');
+        debugPrint(stack.toString());
       } catch (_) {}
-    };
-
-    runApp(const MainApp());
-  }, (error, stack) {
-    try {
-      debugPrint('Uncaught zone error: $error');
-      debugPrint(stack.toString());
-    } catch (_) {}
-  });
+    },
+  );
 }
 
 class MainApp extends StatelessWidget {
