@@ -43,18 +43,19 @@ Global booking records. Created by Cissy's mobile app via `BookingService.create
 
 ### Core fields (written at booking creation)
 
-| Field               | Type      | Description                                                  |
-| ------------------- | --------- | ------------------------------------------------------------ |
-| `booking_id`        | string    | Firebase push key, also stored in the record for convenience |
-| `shuttle_key`       | string    | Which shuttle this booking is for (e.g. `shuttle_001`)       |
-| `user_uid`          | string    | Firebase Auth UID of the user who booked                     |
-| `pickup_stop`       | string    | Display name of pickup stop (e.g. `Western Gate`)            |
-| `pickup_index`      | int       | Index of pickup stop in the designated stops list            |
-| `destination_stop`  | string    | Display name of destination stop                             |
-| `destination_index` | int       | Index of destination stop in the designated stops list       |
-| `status`            | string    | Current lifecycle state (see Status Lifecycle below)         |
-| `qr_payload`        | string    | JSON string containing booking validation data               |
-| `created_at`        | timestamp | Server timestamp when booking was created                    |
+| Field               | Type      | Description                                                                          |
+| ------------------- | --------- | ------------------------------------------------------------------------------------ |
+| `booking_id`        | string    | Firebase push key, also stored in the record for convenience                         |
+| `shuttle_key`       | string    | Which shuttle this booking is for (e.g. `shuttle_001`)                               |
+| `user_uid`          | string    | Firebase Auth UID of the user who booked                                             |
+| `pickup_stop`       | string    | Display name of pickup stop (e.g. `Western Gate`)                                    |
+| `pickup_index`      | int       | Index of pickup stop in the designated stops list                                    |
+| `destination_stop`  | string    | Display name of destination stop                                                     |
+| `destination_index` | int       | Index of destination stop in the designated stops list                               |
+| `status`            | string    | Current lifecycle state (see Status Lifecycle below)                                 |
+| `qr_payload`        | string    | JSON string containing booking validation data                                       |
+| `qr_token`          | string    | Random 16-character anti-forgery token. Must match the `t` field in `qr_payload`.    |
+| `created_at`        | timestamp | Server timestamp when booking was created                                            |
 
 ### Lifecycle fields (added as the booking progresses)
 
@@ -74,15 +75,16 @@ The `qr_payload` field is a JSON-encoded string. When decoded:
 ```json
 {
   "v": 1,
-  "bookingId": "-OrdtdyDMn8ByNtLmzLb",
-  "shuttleKey": "shuttle_001",
-  "userUid": "6BkBMDp6Oqf37Lpiuflud2goif32",
-  "pickupIndex": 0,
-  "destinationIndex": 3
+  "bookingId": "-OsQZ9PF7woPSEOL5xy_",
+  "t": "MnD8JprztIircEoK"
 }
 ```
 
-The QR scanner validates the payload by looking up `bookingId` in `/bookings/` and checking the current status and pickup match.
+The payload is intentionally minimal — just the booking ID and a short anti-forgery token. All other booking details (pickup, destination, user, etc.) are fetched from the booking record itself once the ID is known.
+
+The `t` field must match the `qr_token` stored on the booking record. This prevents an attacker from learning a `bookingId` (which might appear in logs) and forging a valid QR. Without the correct token, scans are rejected with reason `invalid_token`.
+
+The QR scanner validates by parsing the payload, looking up `bookingId` in `/bookings/`, then checking status, pickup match, and token match.
 
 ---
 
@@ -165,11 +167,13 @@ To prevent race conditions and unclear responsibility, each Firebase path has a 
 
 ## Validation Rules at QR Scan
 
-When the QR scanner reads a QR code, it validates against these rules before transitioning a booking to `active`:
+When the QR scanner reads a QR code, it validates against these rules in order before transitioning a booking to `active`:
 
-1. The `bookingId` from the QR payload must exist in `/bookings/`
-2. The booking's `status` must be `reserved` (re-scanning a reserved booking is allowed in case of glitches)
-3. The booking's `pickup_stop` must equal the shuttle's `current_stop`
+1. The QR payload must parse as JSON containing both `bookingId` and `t` fields
+2. The `bookingId` from the payload must exist in `/bookings/`
+3. The booking's `status` must be `reserved` (re-scanning a reserved booking is allowed in case of glitches)
+4. The booking's `pickup_stop` must equal the shuttle's `current_stop`
+5. The `t` field in the payload must equal the booking's `qr_token` (anti-forgery)
 
 If any check fails, the scanner displays the rejection reason and does not modify Firebase state.
 
