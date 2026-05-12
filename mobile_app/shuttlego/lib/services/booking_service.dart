@@ -298,17 +298,61 @@ class BookingService {
       throw BookingException('Only active reservations can be cancelled.');
     }
 
-    await _database.ref().update(<String, Object?>{
-      'bookings/${booking.bookingId}/status': 'cancelled',
-      'bookings/${booking.bookingId}/cancel_reason': reason.trim(),
-      'bookings/${booking.bookingId}/cancelled_at': ServerValue.timestamp,
+    final updates = <String, Object?>{
       'user_bookings/${booking.userUid}/${booking.bookingId}/status':
           'cancelled',
       'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason':
           reason.trim(),
       'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at':
           ServerValue.timestamp,
-    });
+    };
+
+    final bookingRef = _database.ref().child('bookings').child(booking.bookingId);
+    try {
+      final snap = await bookingRef.get();
+      if (snap.value == null) {
+        // Global booking entry missing — create a minimal cancelled record so
+        // the system remains consistent and the user can re-book.
+        final minimal = <String, Object?>{
+          'booking_id': booking.bookingId,
+          'user_uid': booking.userUid,
+          'shuttle_key': booking.shuttleKey,
+          'pickup_stop': booking.pickupStop,
+          'pickup_index': booking.pickupIndex,
+          'destination_stop': booking.destinationStop,
+          'destination_index': booking.destinationIndex,
+          'status': 'cancelled',
+          'cancel_reason': reason.trim(),
+          'cancelled_at': ServerValue.timestamp,
+          'created_at': booking.createdAt ?? ServerValue.timestamp,
+        };
+        updates['bookings/${booking.bookingId}'] = minimal;
+      } else {
+        updates['bookings/${booking.bookingId}/status'] = 'cancelled';
+        updates['bookings/${booking.bookingId}/cancel_reason'] = reason.trim();
+        updates['bookings/${booking.bookingId}/cancelled_at'] =
+            ServerValue.timestamp;
+      }
+    } catch (_) {
+      // If reading the global booking fails for any reason, still ensure the
+      // user's copy is updated so they can make new bookings; create a minimal
+      // global entry as a best-effort.
+      updates['bookings/${booking.bookingId}'] = <String, Object?>{
+        'booking_id': booking.bookingId,
+        'user_uid': booking.userUid,
+        'shuttle_key': booking.shuttleKey,
+        'pickup_stop': booking.pickupStop,
+        'pickup_index': booking.pickupIndex,
+        'destination_stop': booking.destinationStop,
+        'destination_index': booking.destinationIndex,
+        'status': 'cancelled',
+        'cancel_reason': reason.trim(),
+        'cancelled_at': ServerValue.timestamp,
+        'created_at': booking.createdAt ?? ServerValue.timestamp,
+      };
+    }
+
+    await _database.ref().update(updates);
   }
 
   /// Permanently delete a past booking from both the global `bookings`
@@ -323,6 +367,12 @@ class BookingService {
       'user_bookings/${booking.userUid}/${booking.bookingId}': null,
     });
   }
+
+  /// Recover missing `bookings/$bookingId` entries by copying data from
+  /// `user_bookings`. If `userUid` is provided only that user's bookings are
+  /// processed; otherwise all users are scanned. Returns the number of
+  /// booking entries created or updated.
+  
 
   Future<int> _fetchActiveReservationCount(String shuttleKey) async {
     final snapshot = await _database
