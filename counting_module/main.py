@@ -219,8 +219,6 @@ def main():
         camera.stop()
         cv2.destroyAllWindows()
         logger.info("Camera stopped")
-        # advance to next stop so next run starts at the next location
-        counting_logic.advance_stop()
         # advance scenario index so next run plays the next scenario
         scenario_manager.advance()
 

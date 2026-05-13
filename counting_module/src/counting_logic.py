@@ -214,10 +214,21 @@ class CountingLogic:
         if os.path.exists(self.db_path):
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            # write both the index AND the stop name to keep them
+            # in lock-step. Other components read 'current_stop'
+            # (the name) for display/Firebase, so it must stay
+            # consistent with the index that advance_stop owns.
+            current_stop_name = self.designated_stops_list[
+                self.current_stop_index
+            ]
             cursor.execute("""
                 INSERT OR REPLACE INTO system_state (key, value)
                 VALUES ('current_stop_index', ?)
             """, (str(self.current_stop_index),))
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('current_stop', ?)
+            """, (current_stop_name,))
             conn.commit()
             conn.close()
 
