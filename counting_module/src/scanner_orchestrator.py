@@ -31,6 +31,7 @@ from booking_validator import BookingValidator
 from qr_scanner import QRScanner
 from counting_logic import CountingLogic
 from firebase_sync import FirebaseSyncComponent
+from no_show_canceller import NoShowCanceller
 
 logger = logging.getLogger(__name__)
 
@@ -238,10 +239,14 @@ class ScannerOrchestrator:
         shuttle is conceptually pulling away from the curb and
         heading to the next stop.
 
-        Two things must happen, in this order:
-          1. CountingLogic.advance_stop() — moves current_stop_index
+        Three things must happen, in this order:
+          1. NoShowCanceller.cancel_no_shows() — cancel any
+             reserved bookings whose passengers didn't scan at
+             this stop. Must happen BEFORE advance_stop because
+             we need to know which stop is being left.
+          2. CountingLogic.advance_stop() — moves current_stop_index
              forward (with wrap-around) and persists it to SQLite
-          2. FirebaseSyncComponent.sync_to_firebase() — pushes the
+          3. FirebaseSyncComponent.sync_to_firebase() — pushes the
              updated current_stop and next_stop to Firebase so the
              mobile app reflects that the shuttle has moved
 
@@ -257,6 +262,22 @@ class ScannerOrchestrator:
         """
         counting = CountingLogic(db_path=self.db_path)
         counting.initialize()
+        # capture the stop being LEFT before we advance — we need
+        # it to find no-show bookings at this pickup stop
+        stop_being_left = counting.get_current_stop()
+        # cancel any reserved bookings whose passengers didn't scan
+        # at this stop. Drains the retry queue too, so accumulated
+        # cancellations from previous Firebase outages also get
+        # applied this cycle.
+        canceller = NoShowCanceller(
+            shuttle_id=self.shuttle_id, db_path=self.db_path
+        )
+        cancelled_count = canceller.cancel_no_shows(stop=stop_being_left)
+        if cancelled_count > 0:
+            logger.info(
+                f"[NO-SHOWS] Cancelled {cancelled_count} booking(s) "
+                f"at {stop_being_left}"
+            )
         counting.advance_stop()
 
         firebase = FirebaseSyncComponent(shuttle_id=self.shuttle_id)
