@@ -18,6 +18,7 @@ from display import DisplayComponent
 from firebase_sync import FirebaseSyncComponent
 from data_logger import DataLogger
 from system_monitor import SystemMonitor
+from scenario_manager import ScenarioManager
 
 # configure logging
 logging.basicConfig(
@@ -51,8 +52,20 @@ def main():
     counting_logic = CountingLogic()
     counting_logic.initialize()
 
+    # Scenario Manager - decides which video to play this run
+    scenario_manager = ScenarioManager()
+    current_scenario = scenario_manager.get_current_scenario()
+
     # Camera Interface
-    camera_source = os.getenv("CAMERA_SOURCE", "data/test_video.mp4")
+    # if scenarios are available, use the current scenario video for this run
+    # otherwise fall back to the configured CAMERA_SOURCE
+    if current_scenario:
+        camera_source = current_scenario
+        logger.info(f"Playing scenario: {os.path.basename(current_scenario)}")
+    else:
+        camera_source = os.getenv("CAMERA_SOURCE", "data/test_video.mp4")
+        logger.info(f"No scenarios found, using CAMERA_SOURCE: {camera_source}")
+
     camera = CameraInterface(source=camera_source)
     camera.start()
 
@@ -208,6 +221,8 @@ def main():
         logger.info("Camera stopped")
         # advance to next stop so next run starts at the next location
         counting_logic.advance_stop()
+        # advance scenario index so next run plays the next scenario
+        scenario_manager.advance()
 
         # write offline status to SQLite so dashboard reflects shutdown
         conn = sqlite3.connect('local_database/apcoms.db')
