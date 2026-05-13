@@ -28,6 +28,9 @@ counting_module/data/*.avi
 counting_module/data/*.mov
 counting_module/data/scenarios/*.mp4
 
+# Manual verification scripts (kept locally for debugging)
+counting_module/verify_completion.py
+
 # AI model files
 counting_module/models/*.pt
 
