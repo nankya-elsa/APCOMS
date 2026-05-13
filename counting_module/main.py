@@ -19,6 +19,7 @@ from firebase_sync import FirebaseSyncComponent
 from data_logger import DataLogger
 from system_monitor import SystemMonitor
 from scenario_manager import ScenarioManager
+from booking_completer import BookingCompleter
 
 # configure logging
 logging.basicConfig(
@@ -88,6 +89,9 @@ def main():
     )
     firebase_sync.initialize()
 
+    # Booking Completer — marks bookings as 'completed' on alighting
+    booking_completer = BookingCompleter()
+
     logger.info("=" * 60)
     logger.info("All components initialized! Starting main loop...")
     logger.info("Press Q in the display window to quit")
@@ -141,6 +145,16 @@ def main():
                         "available_seats": occupancy["available_seats"],
                         "stop_location": counting_logic.get_current_stop()
                     })
+
+                    # on alighting, try to close the matching booking.
+                    # non-app passengers and detection glitches won't
+                    # match anything -- the completer handles that
+                    # gracefully so this never disrupts counting.
+                    if direction == "alighting":
+                        booking_completer.complete_alighting(
+                            current_stop=counting_logic.get_current_stop()
+                        )
+
 
             # calculate occupancy
             occupancy = counting_logic.calculate_occupancy()
