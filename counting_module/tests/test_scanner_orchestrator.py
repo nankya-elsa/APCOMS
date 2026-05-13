@@ -493,6 +493,52 @@ class TestAdvanceAndSync:
         assert payload["current_stop"] == "Lumumba Hall"
         assert payload["next_stop"] == "Western Gate"
 
+    @patch("scanner_orchestrator.NoShowCanceller")
+    @patch("scanner_orchestrator.FirebaseSyncComponent")
+    @patch("scanner_orchestrator.CountingLogic")
+    def test_advance_and_sync_cancels_no_shows_before_advancing(
+        self, mock_counting_class, mock_firebase_class, mock_canceller_class
+    ):
+        """
+        Before advancing the stop, the orchestrator must cancel
+        any reserved bookings whose passengers didn't show up to
+        scan their QR. This must happen BEFORE advance_stop()
+        because we need to know which stop is being LEFT — once
+        advance runs, the SQLite current_stop has changed to the
+        NEW stop and we'd be cancelling no-shows at the wrong
+        pickup point.
+
+        We verify ordering by checking that cancel_no_shows was
+        called with the stop name BEFORE advance, and that
+        advance_stop was called after.
+        """
+        mock_counting = MagicMock()
+        mock_counting.get_current_stop.return_value = "CONAS"
+        mock_counting.current_stop_index = 2
+        mock_counting.designated_stops_list = [
+            "Western Gate", "CEDAT", "CONAS", "Main Library",
+            "Africa Hall", "Swimming Pool", "Mitchell Hall",
+            "COCIS", "Complex Hall", "CEES", "Lumumba Hall",
+        ]
+        mock_counting_class.return_value = mock_counting
+
+        mock_canceller = MagicMock()
+        mock_canceller.cancel_no_shows.return_value = 0
+        mock_canceller_class.return_value = mock_canceller
+
+        mock_firebase = MagicMock()
+        mock_firebase_class.return_value = mock_firebase
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        orchestrator.advance_and_sync()
+
+        # cancel_no_shows must be called with the stop being LEFT
+        # (CONAS, captured from get_current_stop BEFORE advance)
+        mock_canceller.cancel_no_shows.assert_called_once_with(stop="CONAS")
+
+        # and advance_stop must have been called too — both happen
+        mock_counting.advance_stop.assert_called_once()
+
 
 class TestRunMainLoop:
     """

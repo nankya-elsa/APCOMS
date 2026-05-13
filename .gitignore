@@ -36,3 +36,6 @@ counting_module/models/*.pt
 
 # Local database
 counting_module/local_database/*.db
+
+# to-do in docs
+# counting_module/docs/*.py
