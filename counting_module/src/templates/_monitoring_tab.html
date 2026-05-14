@@ -148,7 +148,7 @@ Live shuttle state with auto-refresh every 5 seconds:
                   {{ log.log_type }}
                 </span>
               </td>
-              <td>{{ log.message }}</td>
+              <td title="{{ log.message }}">{{ log.message }}</td>
             </tr>
             {% endfor %}
           </tbody>
