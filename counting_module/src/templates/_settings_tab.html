@@ -1,0 +1,63 @@
+<!-- Settings tab partial — included by dashboard.html.
+
+Admin controls for shuttle configuration:
+  - Shuttle config form (ID, name, capacity, stops, service hours)
+  - Danger zone (reset passenger count)
+-->
+
+<div id="tab-settings" class="tab-content">
+  <div id="settings-alert" class="alert"></div>
+
+  <!-- SHUTTLE CONFIG -->
+  <div class="settings-panel">
+    <div class="settings-title">Shuttle Configuration</div>
+    <div class="settings-desc">
+      Update shuttle details, stops, and service hours. Changes take effect on
+      next system restart.
+    </div>
+    <div class="settings-grid">
+      <div class="settings-group">
+        <label>Shuttle ID</label>
+        <input type="text" id="shuttle-id" placeholder="e.g. shuttle_001" />
+      </div>
+      <div class="settings-group">
+        <label>Shuttle Name</label>
+        <input
+          type="text"
+          id="shuttle-name"
+          placeholder="e.g. Makerere E-Shuttle 1"
+        />
+      </div>
+      <div class="settings-group">
+        <label>Total Capacity</label>
+        <input type="number" id="total-capacity" placeholder="e.g. 20" />
+      </div>
+      <div class="settings-group">
+        <label>Designated Stops (comma separated)</label>
+        <textarea
+          id="designated-stops"
+          placeholder="Western Gate, CEDAT, CONAS, Main Library..."
+        ></textarea>
+      </div>
+      <div class="settings-group">
+        <label>Service Start Time</label>
+        <input type="time" id="day-start-time" />
+      </div>
+      <div class="settings-group">
+        <label>Service End Time</label>
+        <input type="time" id="day-end-time" />
+      </div>
+    </div>
+    <button class="btn-save" onclick="saveSettings()">Save Settings</button>
+  </div>
+
+  <!-- DANGER ZONE -->
+  <div class="danger-panel">
+    <div class="danger-title">Danger Zone</div>
+    <div class="danger-desc">
+      Reset the passenger count to zero. Use this only when necessary after
+      discussion with the operations team.
+    </div>
+    <button class="btn-danger" onclick="confirmReset()">Reset Count</button>
+  </div>
+</div>
