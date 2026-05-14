@@ -76,7 +76,9 @@ setInterval(function () {
       if (data.diagnostic_logs && data.diagnostic_logs.length > 0) {
         let html = `<table class="logs-table"><thead><tr><th>Time</th><th>Type</th><th>Message</th></tr></thead><tbody>`;
         data.diagnostic_logs.forEach((log) => {
-          html += `<tr><td>${log.timestamp}</td><td><span class="log-type log-${log.log_type}">${log.log_type}</span></td><td>${log.message}</td></tr>`;
+          // escape quotes in the title so an embedded quote doesn't break the attribute
+          const safeMessage = log.message.replace(/"/g, "&quot;");
+          html += `<tr><td>${log.timestamp}</td><td><span class="log-type log-${log.log_type}">${log.log_type}</span></td><td title="${safeMessage}">${log.message}</td></tr>`;
         });
         html += `</tbody></table>`;
         logsPanel.innerHTML = html;

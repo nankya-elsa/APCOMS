@@ -20,6 +20,7 @@ from data_logger import DataLogger
 from system_monitor import SystemMonitor
 from scenario_manager import ScenarioManager
 from booking_completer import BookingCompleter
+from service_day_manager import ServiceDayManager
 
 # configure logging
 logging.basicConfig(
@@ -38,6 +39,15 @@ def main():
     logger.info("BSE26-8 | Nankya Elsa & Musiimenta Cissylyn")
     logger.info("=" * 60)
 
+    # ── STEP 0: Service-day reset (idempotent) ─────────────────
+    # Resets live shuttle state to fresh-day baseline if a new
+    # service day has begun since the last reset. Safe to call —
+    # only performs work if a reset is actually due today.
+    service_day_manager = ServiceDayManager()
+    reset_date = service_day_manager.reset_if_needed()
+    if reset_date:
+        logger.info(f"Service-day reset performed for {reset_date}")
+
     # ── STEP 1: Initialize all components ──────────────────────
     logger.info("Initializing system components...")
 
@@ -50,7 +60,7 @@ def main():
     system_monitor.initialize()
 
     # Counting Logic
-    counting_logic = CountingLogic()
+    counting_logic = CountingLogic(data_logger=data_logger)
     counting_logic.initialize()
 
     # Scenario Manager - decides which video to play this run

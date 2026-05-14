@@ -385,6 +385,28 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
   color: #d1d5db;
 }
 
+/* Keep the first column (timestamp) on a single line so the
+   table stays compact and rows don't grow taller than needed
+   when the timestamp would otherwise wrap on narrow columns. */
+.logs-table td:first-child,
+.logs-table th:first-child {
+  white-space: nowrap;
+}
+
+/* Message column truncates with ellipsis and reveals the full
+   text on hover via the title attribute on the cell. Keeps the
+   table compact while preserving access to long alerts. The
+   width:0 + max-width trick forces ellipsis to engage even
+   when the column would otherwise expand naturally. */
+.logs-table td:nth-child(3) {
+  max-width: 0;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
 .logs-table tr:last-child td {
   border-bottom: none;
 }
