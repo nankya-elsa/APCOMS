@@ -85,4 +85,20 @@ setInterval(function () {
       }
     })
     .catch((err) => console.log("Refresh error:", err));
+
+  // BOOKING STATS — refreshed in parallel with /api/status so the
+  // Expected Here / Boarded Here cards stay in sync with shuttle state
+  fetch("/api/booking_stats")
+    .then((r) => r.json())
+    .then((data) => {
+      if (typeof data.pickups_expected !== "undefined") {
+        document.getElementById("pickups-expected").textContent =
+          data.pickups_expected;
+      }
+      if (typeof data.boarded_from_here !== "undefined") {
+        document.getElementById("boarded-from-here").textContent =
+          data.boarded_from_here;
+      }
+    })
+    .catch((err) => console.log("Booking stats refresh error:", err));
 }, 5000);

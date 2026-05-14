@@ -884,4 +884,82 @@ class FlaskDashboard:
 
             return jsonify({"events": events, "total": len(events)})
 
+        @app.route("/api/booking_stats")
+        def api_booking_stats():
+            """
+            Live booking statistics for the Monitoring tab cards:
+              - pickups_expected: count of reserved bookings at
+                the current stop (passengers about to scan)
+              - boarded_from_here: count of active bookings with
+                pickup_stop matching the current stop (passengers
+                who have already scanned)
+
+            Current stop is read from SQLite system_state where
+            it is kept in sync by main.py and the orchestrator.
+            Defaults to 'Western Gate' if the shuttle hasn't been
+            initialised yet so the dashboard never crashes on a
+            fresh deployment.
+            """
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import jsonify
+            import sqlite3
+            from booking_dashboard_service import BookingDashboardService
+
+            current_stop = "Western Gate"
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT value FROM system_state WHERE key='current_stop'"
+                )
+                row = cursor.fetchone()
+                if row:
+                    current_stop = row[0]
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error reading current_stop: {e}")
+
+            service = BookingDashboardService()
+            return jsonify({
+                "current_stop": current_stop,
+                "pickups_expected": service.get_pickups_expected(current_stop),
+                "boarded_from_here": service.get_boarded_from_stop(current_stop),
+            })
+
+        @app.route("/api/booking_analytics")
+        def api_booking_analytics():
+            """
+            Aggregate booking analytics for the Analytics tab charts:
+              - funnel: cumulative booking lifecycle counts
+                (total_booked, boarded, completed, cancelled)
+              - no_show_rates: per-stop list of total bookings,
+                no-show counts, and no-show rate percentage
+
+            Both accept optional start_date and end_date query params
+            (YYYY-MM-DD format) which filter bookings by created_at.
+            Without filters, all bookings since deployment are counted.
+
+            Both come from the BookingDashboardService which reads
+            Firebase directly. The dashboard is online by definition
+            so no caching layer is needed for these queries.
+            """
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import jsonify, request
+            from booking_dashboard_service import BookingDashboardService
+
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+
+            service = BookingDashboardService()
+            return jsonify({
+                "funnel": service.get_booking_funnel(
+                    start_date=start_date, end_date=end_date
+                ),
+                "no_show_rates": service.get_no_show_rate_by_stop(
+                    start_date=start_date, end_date=end_date
+                ),
+            })
+
 

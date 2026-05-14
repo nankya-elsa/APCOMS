@@ -115,19 +115,116 @@ body {
   display: block;
 }
 
-/* CARDS */
-.cards-grid {
+/* FOUC prevention: when sessionStorage has a saved active tab,
+   the inline <head> script sets data-active-tab on <html> before
+   first paint. These rules override the default .active class
+   so the correct tab is shown from the very first frame, with
+   zero flash of the monitoring tab. */
+html[data-active-tab="analytics"] #tab-monitoring,
+html[data-active-tab="settings"] #tab-monitoring {
+  display: none;
+}
+html[data-active-tab="analytics"] #tab-analytics {
+  display: block;
+}
+html[data-active-tab="settings"] #tab-settings {
+  display: block;
+}
+
+/* Same override for the tab button highlight strip */
+html[data-active-tab="analytics"] .tab-btn:nth-child(1),
+html[data-active-tab="settings"] .tab-btn:nth-child(1) {
+  color: #8b8fa8;
+  border-bottom: 2px solid transparent;
+}
+html[data-active-tab="analytics"] .tab-btn:nth-child(2) {
+  color: #4f9ef7;
+  border-bottom: 2px solid #4f9ef7;
+}
+html[data-active-tab="settings"] .tab-btn:nth-child(3) {
+  color: #4f9ef7;
+  border-bottom: 2px solid #4f9ef7;
+}
+
+/* CARDS — split into two LABELED CONTAINER sections side-by-side.
+   Each section is its own visual box: outer border, label inside,
+   and the cards inside the box. The booking section also gets a
+   subtle blue tint so the categories read at a glance.
+   Shuttle State (4 cards) | Booking Activity (2 cards) */
+.cards-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 4fr 2fr;
   gap: 16px;
   margin-bottom: 24px;
+}
+
+.cards-section {
+  background: #131620;
+  border: 1px solid #2a2d3a;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.cards-section.booking {
+  background: rgba(20, 32, 46, 0.6);
+  border: 1px solid rgba(79, 158, 247, 0.3);
+}
+
+.cards-section-label {
+  font-size: 11px;
+  color: #8b8fa8;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.cards-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.cards-grid.shuttle-state {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.cards-grid.booking-activity {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* Inner cards inside booking section keep their tinted look
+   so each card still stands out from the section background. */
+.cards-grid.booking-activity .card {
+  background: #14202e;
+  border: 1px solid rgba(79, 158, 247, 0.25);
+}
+
+/* Responsive: tablet — sections stack vertically, shuttle state
+   becomes 2 columns, booking activity stays 2 columns. */
+@media (max-width: 1100px) {
+  .cards-row {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .cards-grid.shuttle-state {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Responsive: mobile — both sections show 2 cards per row,
+   stacked vertically by the parent .cards-row media query above */
+@media (max-width: 700px) {
+  .cards-grid.shuttle-state,
+  .cards-grid.booking-activity {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
 }
 
 .card {
   background: #1a1d27;
   border: 1px solid #2a2d3a;
   border-radius: 10px;
-  padding: 20px;
+  padding: 16px;
 }
 
 .card-label {
@@ -139,9 +236,14 @@ body {
 }
 
 .card-value {
-  font-size: 32px;
+  font-size: 26px;
   font-weight: 700;
   color: #ffffff;
+}
+
+/* Bigger value font on the wider analytics summary cards */
+.analytics-summary-grid .card-value {
+  font-size: 32px;
 }
 
 .card-value.green {
@@ -189,12 +291,18 @@ body {
   color: #8b8fa8;
 }
 
-/* TWO COLUMN LAYOUT */
+/* TWO COLUMN LAYOUT (collapses on small screens) */
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
+}
+
+@media (max-width: 900px) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
 }
 
 .panel {
@@ -309,6 +417,12 @@ body {
   margin-bottom: 24px;
 }
 
+@media (max-width: 700px) {
+  .analytics-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .analytics-filter-bar {
   background: #1a1d27;
   border: 1px solid #2a2d3a;
@@ -321,12 +435,49 @@ body {
   flex-wrap: wrap;
 }
 
-/* 2x2 chart grid */
+/* Analytics section containers — labeled boxes that group related
+   charts. Mirrors the monitoring tab's section design for visual
+   consistency across the dashboard. */
+.analytics-section {
+  background: #131620;
+  border: 1px solid #2a2d3a;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.analytics-section.booking {
+  background: rgba(20, 32, 46, 0.6);
+  border: 1px solid rgba(79, 158, 247, 0.3);
+}
+
+.analytics-section-label {
+  font-size: 11px;
+  color: #8b8fa8;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 16px;
+}
+
+/* Inside the analytics sections we re-use the existing
+   .charts-grid styles, but remove its bottom margin since the
+   parent section already handles spacing. */
+.analytics-section .charts-grid {
+  margin-bottom: 0;
+}
+
+/* 2x2 chart grid (collapses to single column on small screens) */
 .charts-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
+}
+
+@media (max-width: 900px) {
+  .charts-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .chart-panel {
@@ -339,6 +490,21 @@ body {
 .chart-container {
   position: relative;
   height: 250px;
+}
+
+/* Loading overlay that fills the chart container while data is
+   being fetched. Centered "Loading..." text on the chart background
+   */
+.chart-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b8fa8;
+  font-size: 14px;
+  font-style: italic;
+  pointer-events: none;
 }
 
 .chart-suggestion {
