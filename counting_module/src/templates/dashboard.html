@@ -13,6 +13,22 @@
       rel="stylesheet"
       href="{{ url_for('static', filename='css/dashboard.css') }}"
     />
+    <!-- Tab restoration runs BEFORE first paint to avoid FOUC.
+         Sets a data attribute on <html> that CSS uses to show the
+         correct tab from the very first frame, without waiting for
+         DOMContentLoaded. -->
+    <script>
+      (function () {
+        try {
+          var savedTab = sessionStorage.getItem("apcoms_active_tab");
+          if (savedTab) {
+            document.documentElement.setAttribute("data-active-tab", savedTab);
+          }
+        } catch (e) {
+          // sessionStorage might be disabled; default tab stays active
+        }
+      })();
+    </script>
   </head>
   <body>
     <!-- NAVBAR -->

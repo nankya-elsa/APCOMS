@@ -9,6 +9,8 @@ let adoptionChartInstance = null;
 let peakHoursChartInstance = null;
 let stopPopularityChartInstance = null;
 let dayOfWeekChartInstance = null;
+let bookingFunnelChartInstance = null;
+let noShowRateChartInstance = null;
 
 // ANALYTICS - LOAD AND RENDER CHARTS
 function loadAnalytics(
@@ -17,7 +19,24 @@ function loadAnalytics(
   startTime = null,
   endTime = null,
 ) {
+  // Show loading overlays on all chart containers while fetches are
+  // in flight. Each chart's render function will hide its own overlay
+  // when the canvas is populated.
+  const chartIds = [
+    "adoption-chart",
+    "peak-hours-chart",
+    "stop-popularity-chart",
+    "day-of-week-chart",
+    "booking-funnel-chart",
+    "no-show-rate-chart",
+  ];
+  chartIds.forEach((id) => {
+    const overlay = document.getElementById(id + "-loading");
+    if (overlay) overlay.style.display = "flex";
+  });
+
   let url = "/api/analytics";
+
   const params = [];
   if (startDate) params.push("start_date=" + startDate);
   if (endDate) params.push("end_date=" + endDate);
@@ -42,6 +61,28 @@ function loadAnalytics(
       renderDayOfWeekChart(data.day_of_week_data);
     })
     .catch((err) => console.log("Analytics load error:", err));
+
+  // Booking insights are fetched separately because they come from
+  // Firebase (not SQLite passenger events). They accept the same
+  // start_date / end_date filter as the passenger traffic charts so
+  // the entire Analytics tab refreshes consistently when the operator
+  // applies a date range. Time filters (start_time / end_time) don't
+  // apply to bookings — they're stored as ms timestamps and grouped
+  // by the date the user created the booking, not the time-of-day.
+  let bookingUrl = "/api/booking_analytics";
+  const bookingParams = [];
+  if (startDate) bookingParams.push("start_date=" + startDate);
+  if (endDate) bookingParams.push("end_date=" + endDate);
+  if (bookingParams.length) bookingUrl += "?" + bookingParams.join("&");
+
+  fetch(bookingUrl)
+    .then((r) => r.json())
+    .then((data) => {
+      renderBookingFunnelChart(data.funnel);
+      renderNoShowRateChart(data.no_show_rates);
+      updateBookingSuggestions(data);
+    })
+    .catch((err) => console.log("Booking analytics load error:", err));
 }
 
 function applyAnalyticsFilter() {
@@ -93,8 +134,8 @@ function updateSuggestions(data) {
       const quietIdx = hours.indexOf(minVal);
       const quietHour = labels[quietIdx];
       document.getElementById("peak-hours-suggestion").innerHTML =
-        `🔴 Peak: <strong>${peakHour}</strong> (${peakPct}% of daily volume) — ensure shuttle availability. ` +
-        `🔵 Quietest: <strong>${quietHour}</strong> — ideal for charging or maintenance.`;
+        `🔴 Peak: <strong>${peakHour}</strong> (${peakPct}% of daily volume), ensure shuttle availability. ` +
+        `🔵 Quietest: <strong>${quietHour}</strong>, ideal for charging or maintenance.`;
     } else {
       document.getElementById("peak-hours-suggestion").innerHTML =
         `🔴 All boardings concentrated at <strong>${peakHour}</strong>.`;
@@ -110,10 +151,10 @@ function updateSuggestions(data) {
   if (stops.length > 0) {
     const total = stopValues.reduce((a, b) => a + b, 0);
     const topPct = total > 0 ? Math.round((stopValues[0] / total) * 100) : 0;
-    let suggestion = `<strong>${stops[0]}</strong> handles ${topPct}% of all boardings`;
+    let suggestion = `<strong>${stops[0]}</strong> handles ${topPct}% of all boardings,`;
     if (stops.length > 1) {
       const bottom = stops[stops.length - 1];
-      suggestion += ` — consider extending dwell time here. <strong>${bottom}</strong> is least used; review route necessity.`;
+      suggestion += ` consider extending dwell time here. <strong>${bottom}</strong> is least used; review route necessity.`;
     } else {
       suggestion += `.`;
     }
@@ -167,7 +208,7 @@ function updateSuggestions(data) {
     let suggestion = `<strong>${peakDay}</strong> is busiest with ${maxDow} boardings.`;
     if (weekdayAvg > 0 && weekendAvg < weekdayAvg * 0.5) {
       const ratio = Math.round((weekendAvg / weekdayAvg) * 100);
-      suggestion += ` Weekends only ${ratio}% of weekday volume — consider reduced weekend service.`;
+      suggestion += ` Weekends only ${ratio}% of weekday volume, consider reduced weekend service.`;
     }
     document.getElementById("day-of-week-suggestion").innerHTML = suggestion;
   } else {
@@ -177,6 +218,8 @@ function updateSuggestions(data) {
 }
 
 function renderAdoptionChart(adoptionData) {
+  const loader = document.getElementById("adoption-chart-loading");
+  if (loader) loader.style.display = "none";
   const ctx = document.getElementById("adoption-chart").getContext("2d");
   if (adoptionChartInstance) adoptionChartInstance.destroy();
   adoptionChartInstance = new Chart(ctx, {
@@ -214,6 +257,8 @@ function renderAdoptionChart(adoptionData) {
 }
 
 function renderPeakHoursChart(peakData) {
+  const loader = document.getElementById("peak-hours-chart-loading");
+  if (loader) loader.style.display = "none";
   const ctx = document.getElementById("peak-hours-chart").getContext("2d");
   if (peakHoursChartInstance) peakHoursChartInstance.destroy();
   const values = peakData.values;
@@ -256,6 +301,8 @@ function renderPeakHoursChart(peakData) {
 }
 
 function renderStopPopularityChart(stopData) {
+  const loader = document.getElementById("stop-popularity-chart-loading");
+  if (loader) loader.style.display = "none";
   const ctx = document.getElementById("stop-popularity-chart").getContext("2d");
   if (stopPopularityChartInstance) stopPopularityChartInstance.destroy();
   stopPopularityChartInstance = new Chart(ctx, {
@@ -290,6 +337,8 @@ function renderStopPopularityChart(stopData) {
 }
 
 function renderDayOfWeekChart(dayData) {
+  const loader = document.getElementById("day-of-week-chart-loading");
+  if (loader) loader.style.display = "none";
   const ctx = document.getElementById("day-of-week-chart").getContext("2d");
   if (dayOfWeekChartInstance) dayOfWeekChartInstance.destroy();
   // weekend lighter, weekday brighter
@@ -378,6 +427,177 @@ function refreshPreview() {
       document.getElementById("preview-tbody").innerHTML =
         `<tr><td colspan="5" style="text-align: center; color: #ef4444;">Error loading events.</td></tr>`;
     });
+}
+
+// BOOKING FUNNEL CHART - horizontal bar chart showing cumulative
+// booking lifecycle counts: Total Booked, Boarded, Completed, Cancelled.
+// Bars shrink left-to-right showing drop-off through the funnel.
+function renderBookingFunnelChart(funnelData) {
+  const loader = document.getElementById("booking-funnel-chart-loading");
+  if (loader) loader.style.display = "none";
+  const ctx = document.getElementById("booking-funnel-chart").getContext("2d");
+  if (bookingFunnelChartInstance) bookingFunnelChartInstance.destroy();
+
+  // Funnel steps in narrative order — booked first, then those who
+  // boarded, then those who completed. Cancelled shown separately
+  // as the exit branch.
+  const labels = ["Total Booked", "Boarded", "Completed", "Cancelled"];
+  const values = [
+    funnelData.total_booked,
+    funnelData.boarded,
+    funnelData.completed,
+    funnelData.cancelled,
+  ];
+  // Color-code: funnel progression in blue shades, cancellation in red
+  const colors = ["#4f9ef7", "#3b82f6", "#22c55e", "#ef4444"];
+
+  bookingFunnelChartInstance = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: "Bookings",
+          data: values,
+          backgroundColor: colors,
+          borderColor: colors,
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: { color: "#8b8fa8" },
+          grid: { color: "#1f2230" },
+          beginAtZero: true,
+        },
+        y: { ticks: { color: "#8b8fa8" }, grid: { color: "#1f2230" } },
+      },
+    },
+  });
+}
+
+// NO-SHOW RATE BY STOP CHART - bar chart of % no-show per stop,
+// sorted descending so worst stops appear first. Red bars draw
+// the eye to problem stops needing operational attention.
+function renderNoShowRateChart(rateData) {
+  const loader = document.getElementById("no-show-rate-chart-loading");
+  if (loader) loader.style.display = "none";
+  const ctx = document.getElementById("no-show-rate-chart").getContext("2d");
+  if (noShowRateChartInstance) noShowRateChartInstance.destroy();
+
+  // Sort descending by rate so worst offenders are at the top
+  const sorted = [...rateData].sort((a, b) => b.rate - a.rate);
+  const labels = sorted.map((r) => r.stop);
+  const values = sorted.map((r) => r.rate);
+
+  // Color severity: high no-show rate = red, medium = orange, low = green
+  const colors = values.map((v) => {
+    if (v >= 30) return "#ef4444";
+    if (v >= 15) return "#eab308";
+    return "#22c55e";
+  });
+
+  noShowRateChartInstance = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: "No-Show Rate (%)",
+          data: values,
+          backgroundColor: colors,
+          borderColor: colors,
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (context) {
+              const idx = context.dataIndex;
+              const stop = sorted[idx];
+              return `${stop.no_shows} of ${stop.total} bookings (${stop.rate}%)`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "#8b8fa8",
+            callback: function (value) {
+              return value + "%";
+            },
+          },
+          grid: { color: "#1f2230" },
+          beginAtZero: true,
+          max: 100,
+        },
+        y: { ticks: { color: "#8b8fa8" }, grid: { color: "#1f2230" } },
+      },
+    },
+  });
+}
+
+// BOOKING SUGGESTIONS - data-driven insights below each booking chart.
+// Translates raw numbers into actionable narrative for the operator.
+function updateBookingSuggestions(data) {
+  // Funnel suggestion — surface the biggest drop-off in the funnel
+  const f = data.funnel;
+  const funnelSugEl = document.getElementById("booking-funnel-suggestion");
+  if (f.total_booked === 0) {
+    funnelSugEl.innerHTML = "No bookings yet, waiting for first reservations.";
+  } else {
+    const boardRate = Math.round((f.boarded / f.total_booked) * 100);
+    const cancelRate = Math.round((f.cancelled / f.total_booked) * 100);
+    const inTransit = f.boarded - f.completed;
+    let parts = [];
+    parts.push(
+      `<strong>${boardRate}%</strong> of bookings made it to boarding`,
+    );
+    if (cancelRate > 0) {
+      parts.push(`<strong>${cancelRate}%</strong> cancelled`);
+    }
+    if (inTransit > 0) {
+      parts.push(`<strong>${inTransit}</strong> currently onboard`);
+    }
+    funnelSugEl.innerHTML = parts.join(" · ");
+  }
+
+  // No-show rate suggestion — highlight worst stop or congratulate clean ops
+  const rates = data.no_show_rates;
+  const rateSugEl = document.getElementById("no-show-rate-suggestion");
+  if (!rates || rates.length === 0) {
+    rateSugEl.innerHTML = "No booking activity at any stop yet.";
+  } else {
+    const sorted = [...rates].sort((a, b) => b.rate - a.rate);
+    const worst = sorted[0];
+    if (worst.rate === 0) {
+      rateSugEl.innerHTML =
+        "Zero no-shows across all stops, bookings are converting cleanly.";
+    } else if (worst.rate >= 30) {
+      rateSugEl.innerHTML =
+        `🔴 <strong>${worst.stop}</strong> has a ${worst.rate}% no-show rate ` +
+        `(${worst.no_shows} of ${worst.total} bookings). ` +
+        `Consider reminder notifications or schedule review.`;
+    } else if (worst.rate >= 15) {
+      rateSugEl.innerHTML = `🟡 <strong>${worst.stop}</strong> has a ${worst.rate}% no-show rate. Worth monitoring.`;
+    } else {
+      rateSugEl.innerHTML = `🟢 Worst stop is <strong>${worst.stop}</strong> at ${worst.rate}%, booking conversion is healthy overall.`;
+    }
+  }
 }
 
 // EXPORT DATA - uses the same filters as the preview table

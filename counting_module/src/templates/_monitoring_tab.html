@@ -12,46 +12,70 @@ Live shuttle state with auto-refresh every 5 seconds:
     Last updated: {{ data.occupancy.last_updated }}
   </div>
 
-  <!-- OCCUPANCY CARDS -->
-  <div class="cards-grid">
-    <div class="card">
-      <div class="card-label">Passengers Onboard</div>
-      <div class="card-value blue" id="passenger-count">
-        {{ data.occupancy.current_count }}
+  <!-- TWO LABELED SECTIONS: Shuttle State (4 cards) + Booking Activity (2 cards) -->
+  <div class="cards-row">
+    <!-- SHUTTLE STATE SECTION -->
+    <div class="cards-section">
+      <div class="cards-section-label">Shuttle State</div>
+      <div class="cards-grid shuttle-state">
+        <div class="card">
+          <div class="card-label">Passengers Onboard</div>
+          <div class="card-value blue" id="passenger-count">
+            {{ data.occupancy.current_count }}
+          </div>
+          <div class="card-sub">Current count</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Available Seats</div>
+          <div
+            class="card-value {% if data.occupancy.available_seats == 0 %}red{% elif data.occupancy.available_seats <= 5 %}yellow{% else %}green{% endif %}"
+            id="available-seats"
+          >
+            {{ data.occupancy.available_seats }}
+          </div>
+          <div class="card-sub">Remaining capacity</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Occupancy Status</div>
+          <div class="card-value" id="occupancy-status">
+            {% if data.occupancy.occupancy_status == "Available" %}
+            <span class="status-badge status-active">Available</span>
+            {% elif data.occupancy.occupancy_status == "Nearly Full" %}
+            <span class="status-badge status-warning">Nearly Full</span>
+            {% else %}
+            <span class="status-badge status-error">Full</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Current Stop</div>
+          <div class="card-value" style="font-size: 18px" id="current-stop">
+            {{ data.occupancy.current_stop }}
+          </div>
+          <div class="card-sub">Shuttle location</div>
+        </div>
       </div>
-      <div class="card-sub">Current count</div>
     </div>
 
-    <div class="card">
-      <div class="card-label">Available Seats</div>
-      <div
-        class="card-value {% if data.occupancy.available_seats == 0 %}red{% elif data.occupancy.available_seats <= 5 %}yellow{% else %}green{% endif %}"
-        id="available-seats"
-      >
-        {{ data.occupancy.available_seats }}
-      </div>
-      <div class="card-sub">Remaining capacity</div>
-    </div>
+    <!-- BOOKING ACTIVITY SECTION -->
+    <div class="cards-section booking">
+      <div class="cards-section-label">Booking Activity</div>
+      <div class="cards-grid booking-activity">
+        <div class="card">
+          <div class="card-label">Expected Here</div>
+          <div class="card-value blue" id="pickups-expected">0</div>
+          <div class="card-sub">Reserved pickups</div>
+        </div>
 
-    <div class="card">
-      <div class="card-label">Occupancy Status</div>
-      <div class="card-value" id="occupancy-status">
-        {% if data.occupancy.occupancy_status == "Available" %}
-        <span class="status-badge status-active">Available</span>
-        {% elif data.occupancy.occupancy_status == "Nearly Full" %}
-        <span class="status-badge status-warning">Nearly Full</span>
-        {% else %}
-        <span class="status-badge status-error">Full</span>
-        {% endif %}
+        <div class="card">
+          <div class="card-label">Boarded Here</div>
+          <div class="card-value green" id="boarded-from-here">0</div>
+          <div class="card-sub">Scanned at this stop</div>
+        </div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Current Stop</div>
-      <div class="card-value" style="font-size: 18px" id="current-stop">
-        {{ data.occupancy.current_stop }}
-      </div>
-      <div class="card-sub">Shuttle location</div>
     </div>
   </div>
 
