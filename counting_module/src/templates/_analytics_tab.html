@@ -1,0 +1,230 @@
+<!-- Analytics tab partial — included by dashboard.html.
+
+Aggregate insights with full filter controls:
+  - Summary cards (total boardings, average occupancy, top stop)
+  - Date/time range filter bar
+  - 2x2 chart grid: adoption, peak hours, stop popularity, day-of-week
+  - Filterable passenger events preview table with CSV export
+-->
+
+<div id="tab-analytics" class="tab-content">
+  <!-- SUMMARY CARDS -->
+  <div class="analytics-summary-grid">
+    <div class="card">
+      <div class="card-label">Total Boardings</div>
+      <div class="card-value blue" id="analytics-total-boardings">
+        {{ analytics.total_boardings }}
+      </div>
+      <div class="card-sub">Since deployment</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Average Occupancy</div>
+      <div
+        class="card-value"
+        style="color: #22c55e"
+        id="analytics-avg-occupancy"
+      >
+        {{ analytics.average_occupancy }}
+      </div>
+      <div class="card-sub">Passengers per event</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Most Popular Stop</div>
+      <div
+        class="card-value"
+        style="font-size: 18px"
+        id="analytics-popular-stop"
+      >
+        {{ analytics.most_popular_stop }}
+      </div>
+      <div class="card-sub">By boarding volume</div>
+    </div>
+  </div>
+
+  <!-- DATE & TIME RANGE FILTER -->
+  <div class="analytics-filter-bar">
+    <div class="filter-group" style="flex: 1; min-width: 180px">
+      <label>From</label>
+      <div style="display: flex; gap: 6px">
+        <input type="date" id="analytics-start" style="flex: 1" />
+        <input type="time" id="analytics-start-time" style="flex: 1" />
+      </div>
+    </div>
+    <div class="filter-group" style="flex: 1; min-width: 180px">
+      <label>To</label>
+      <div style="display: flex; gap: 6px">
+        <input type="date" id="analytics-end" style="flex: 1" />
+        <input type="time" id="analytics-end-time" style="flex: 1" />
+      </div>
+    </div>
+    <button class="btn-apply" onclick="applyAnalyticsFilter()">
+      Apply Filter
+    </button>
+    <button class="btn-clear" onclick="clearAnalyticsFilter()">Clear</button>
+    <span
+      id="filter-status"
+      style="
+        color: #8b8fa8;
+        font-size: 12px;
+        margin-left: 8px;
+        flex-basis: 100%;
+      "
+    >
+      Showing all data since deployment
+    </span>
+  </div>
+
+  <!-- 2x2 CHART GRID -->
+  <div class="charts-grid">
+    <!-- GRAPH 1: SHUTTLE ADOPTION -->
+    <div class="chart-panel">
+      <div class="panel-title">Shuttle Adoption Over Time</div>
+      <div class="chart-container">
+        <canvas id="adoption-chart"></canvas>
+      </div>
+      <div class="chart-suggestion" id="adoption-suggestion">
+        Tracking daily boarding trends since deployment.
+      </div>
+    </div>
+
+    <!-- GRAPH 2: PEAK HOURS -->
+    <div class="chart-panel">
+      <div class="panel-title">Peak Hours Analysis</div>
+      <div class="chart-container">
+        <canvas id="peak-hours-chart"></canvas>
+      </div>
+      <div class="chart-suggestion" id="peak-hours-suggestion">
+        Red bars = peak demand hours. Blue bars = low demand windows ideal for
+        charging.
+      </div>
+    </div>
+
+    <!-- GRAPH 3: STOP POPULARITY -->
+    <div class="chart-panel">
+      <div class="panel-title">Stop Popularity Ranking</div>
+      <div class="chart-container">
+        <canvas id="stop-popularity-chart"></canvas>
+      </div>
+      <div class="chart-suggestion" id="stop-popularity-suggestion">
+        Stops ranked by boarding volume to inform route optimization.
+      </div>
+    </div>
+
+    <!-- GRAPH 4: DAY OF WEEK -->
+    <div class="chart-panel">
+      <div class="panel-title">Day of Week Pattern</div>
+      <div class="chart-container">
+        <canvas id="day-of-week-chart"></canvas>
+      </div>
+      <div class="chart-suggestion" id="day-of-week-suggestion">
+        Boardings by weekday, informs weekly schedule planning.
+      </div>
+    </div>
+  </div>
+
+  <!-- DATA PREVIEW + EXPORT -->
+  <div class="data-preview-panel">
+    <div class="panel-title">
+      Passenger Events Data
+      <span
+        id="preview-count"
+        style="
+          float: right;
+          color: #8b8fa8;
+          font-size: 11px;
+          font-weight: 400;
+          text-transform: none;
+          letter-spacing: 0;
+        "
+      >
+        Loading...
+      </span>
+    </div>
+
+    <!-- FILTER ROW -->
+    <div
+      style="
+        display: grid;
+        grid-template-columns: 1.5fr 1.5fr 1fr 1fr auto;
+        gap: 12px;
+        margin-bottom: 16px;
+        align-items: end;
+      "
+    >
+      <div class="filter-group">
+        <label>From</label>
+        <div style="display: flex; gap: 6px">
+          <input
+            type="date"
+            id="start-date"
+            onchange="refreshPreview()"
+            style="flex: 1"
+          />
+          <input
+            type="time"
+            id="start-time"
+            onchange="refreshPreview()"
+            style="flex: 1"
+          />
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>To</label>
+        <div style="display: flex; gap: 6px">
+          <input
+            type="date"
+            id="end-date"
+            onchange="refreshPreview()"
+            style="flex: 1"
+          />
+          <input
+            type="time"
+            id="end-time"
+            onchange="refreshPreview()"
+            style="flex: 1"
+          />
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>Direction</label>
+        <select id="direction" onchange="refreshPreview()">
+          <option value="">All</option>
+          <option value="boarding">Boarding</option>
+          <option value="alighting">Alighting</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Stop Location</label>
+        <select id="stop-location" onchange="refreshPreview()">
+          <option value="">All Stops</option>
+          {% for stop in stops %}
+          <option value="{{ stop }}">{{ stop }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn-export" onclick="exportData()">Export CSV</button>
+    </div>
+
+    <!-- DATA TABLE -->
+    <div id="data-preview-container">
+      <table class="preview-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Direction</th>
+            <th>Onboard</th>
+            <th>Available</th>
+            <th>Stop</th>
+          </tr>
+        </thead>
+        <tbody id="preview-tbody">
+          <tr>
+            <td colspan="5" style="text-align: center; color: #8b8fa8">
+              Loading events...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
