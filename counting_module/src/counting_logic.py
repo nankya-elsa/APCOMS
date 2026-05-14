@@ -7,12 +7,13 @@ logger = logging.getLogger(__name__)
 
 class CountingLogic:
 
-    def __init__(self, total_capacity=None, db_path=None):
+    def __init__(self, total_capacity=None, db_path=None, data_logger=None):
         import json
 
         self.db_path = db_path or "local_database/apcoms.db"
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
+        self.data_logger = data_logger
         self.counted_tracks = []
         self.current_stop_index = 0
         self.passenger_count = 0
@@ -149,6 +150,19 @@ class CountingLogic:
         Updates passenger count based on direction of movement.
         Prevents double counting by tracking already counted track IDs.
         Logs boarding and alighting events for the Data Logger Component.
+
+        When the AI detects a boarding while the shuttle is already at
+        capacity, the boarding is REFUSED (passenger_count not bumped,
+        no passenger_event logged) AND a diagnostic alert is raised
+        through the optional DataLogger. This surfaces possible safety
+        risks (overloading attempts) and AI false positives to the
+        operator's dashboard. The track_id is still marked as counted
+        so the alert doesn't re-fire on every subsequent frame for
+        the same detection.
+
+        When alighting is detected with count already at zero, a less
+        severe warning is logged through the same mechanism. This is
+        usually an AI false positive but still worth surfacing.
         """
         if track is None:
             return
@@ -165,7 +179,24 @@ class CountingLogic:
                 self.counted_tracks.append(track["track_id"])
                 logger.info(f"Boarding event - passenger count: {self.passenger_count}")
             else:
-                logger.warning("Shuttle at full capacity")
+                # ILLEGAL BOARDING: shuttle at capacity but AI sees someone
+                # boarding. Mark track_id so we don't re-alert every frame.
+                self.counted_tracks.append(track["track_id"])
+                logger.warning(
+                    "Illegal boarding attempt: shuttle at full capacity"
+                )
+                if self.data_logger:
+                    try:
+                        self.data_logger.log_diagnostic({
+                            "log_type": "error",
+                            "message": (
+                                "Illegal boarding attempt: shuttle at full capacity"
+                            ),
+                        })
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to log illegal-boarding alert: {e}"
+                        )
 
         elif direction == "alighting":
             if self.passenger_count > 0:
@@ -174,7 +205,23 @@ class CountingLogic:
                 self.counted_tracks.append(track["track_id"])
                 logger.info(f"Alighting event - passenger count: {self.passenger_count}")
             else:
-                logger.warning("Count already at zero")
+                # GHOST ALIGHTING: AI sees someone exit but count is
+                # already zero. Likely an AI false positive but worth
+                # surfacing for diagnostics.
+                self.counted_tracks.append(track["track_id"])
+                logger.warning("Ghost alighting: count already at zero")
+                if self.data_logger:
+                    try:
+                        self.data_logger.log_diagnostic({
+                            "log_type": "warning",
+                            "message": (
+                                "Ghost alighting: Model exit detected but count is zero"
+                            ),
+                        })
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to log ghost-alighting alert: {e}"
+                        )
 
     def calculate_occupancy(self):
         """

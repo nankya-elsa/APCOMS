@@ -32,6 +32,7 @@ from qr_scanner import QRScanner
 from counting_logic import CountingLogic
 from firebase_sync import FirebaseSyncComponent
 from no_show_canceller import NoShowCanceller
+from service_day_manager import ServiceDayManager
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,11 @@ class ScannerOrchestrator:
         logger.info("APCOMS Scanner Orchestrator started")
         logger.info("Press Ctrl+C at the prompt to exit")
         logger.info("=" * 60)
+
+        service_day_manager = ServiceDayManager(db_path=self.db_path)
+        reset_date = service_day_manager.reset_if_needed()
+        if reset_date:
+            logger.info(f"Service-day reset performed for {reset_date}")
 
         try:
             while True:

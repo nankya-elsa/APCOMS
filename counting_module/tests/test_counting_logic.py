@@ -377,7 +377,9 @@ class TestCountUpdating:
 
         with caplog.at_level(logging.WARNING):
             counter.update_count(track)
-        assert "Shuttle at full capacity" in caplog.text
+        # message updated to be clearer about what the situation means
+        assert "Illegal boarding attempt" in caplog.text
+        assert "full capacity" in caplog.text
 
     def test_logs_warning_when_count_already_at_zero(self, caplog):
         """
@@ -398,7 +400,9 @@ class TestCountUpdating:
 
         with caplog.at_level(logging.WARNING):
             counter.update_count(track)
-        assert "Count already at zero" in caplog.text
+        # message updated to label this as a "ghost" detection
+        assert "Ghost alighting" in caplog.text
+        assert "already at zero" in caplog.text
 
 
 class TestOccupancyCalculation:
@@ -525,3 +529,238 @@ class TestCountReset:
         with caplog.at_level(logging.INFO):
             counter.reset_count()
         assert "Passenger count reset at:" in caplog.text
+
+
+class TestIllegalBoardingAlert:
+    """
+    Tests covering the diagnostic alert raised when the AI detects
+    a boarding while the shuttle is already at capacity.
+
+    The alert exists because at full capacity, no legitimate
+    passenger should be boarding (the booking system would have
+    refused their reservation). An AI-detected boarding under
+    these conditions represents either:
+      - A safety risk (someone forcing their way onto a full shuttle)
+      - An AI false positive (luggage, reflections, etc.)
+
+    Either way, the operator needs to know. The system:
+      1. Does NOT increment passenger_count (capacity stays correct)
+      2. Does NOT log a row to passenger_events (analytics stays clean)
+      3. DOES log a diagnostic entry so the dashboard surfaces it
+      4. DOES add the track_id to counted_tracks so the same person
+         doesn't re-trigger the alert on every subsequent frame
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        """Clean test database state before each test."""
+        import sqlite3
+        import os
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        conn.commit()
+        conn.close()
+
+    def _boarding_track(self, track_id):
+        """
+        Build a track dict shaped like determine_direction() expects.
+        previous_centroid above midpoint (540) and current_centroid
+        below midpoint = boarding direction.
+        """
+        return {
+            "track_id": track_id,
+            "previous_centroid": [400, 200],
+            "current_centroid": [400, 800],
+        }
+
+    def test_alert_raised_when_boarding_at_capacity(self):
+        """
+        When a boarding track is processed while passenger_count
+        is already at total_capacity, the DataLogger receives a
+        log_diagnostic call with severity 'error'.
+        """
+        from unittest.mock import MagicMock
+        mock_logger = MagicMock()
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=mock_logger)
+        counting.initialize()
+        counting.passenger_count = counting.total_capacity
+        counting.available_seats = 0
+
+        counting.update_count(self._boarding_track("track_illegal_1"))
+
+        mock_logger.log_diagnostic.assert_called_once()
+        # log_diagnostic takes a single dict argument
+        passed_dict = mock_logger.log_diagnostic.call_args.args[0]
+        assert passed_dict["log_type"] == "error"
+
+    def test_passenger_count_unchanged_when_at_capacity(self):
+        """
+        At capacity, the boarding does NOT bump the live count.
+        passenger_count stays at total_capacity. Preserves the
+        existing safety guard.
+        """
+        from unittest.mock import MagicMock
+        mock_logger = MagicMock()
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=mock_logger)
+        counting.initialize()
+        counting.passenger_count = counting.total_capacity
+        counting.available_seats = 0
+
+        counting.update_count(self._boarding_track("track_illegal_2"))
+
+        assert counting.passenger_count == counting.total_capacity
+        assert counting.available_seats == 0
+
+    def test_track_id_marked_as_counted_to_prevent_spam(self):
+        """
+        Even though the boarding wasn't counted toward occupancy,
+        the track_id must be added to counted_tracks. Otherwise the
+        same person appearing in every frame would trigger the alert
+        AGAIN every frame, flooding the diagnostic logs and dashboard.
+        The alert should fire ONCE per illegal attempt.
+        """
+        from unittest.mock import MagicMock
+        mock_logger = MagicMock()
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=mock_logger)
+        counting.initialize()
+        counting.passenger_count = counting.total_capacity
+        counting.available_seats = 0
+
+        track = self._boarding_track("track_illegal_3")
+        counting.update_count(track)
+        counting.update_count(track)  # same person, next frame
+
+        assert mock_logger.log_diagnostic.call_count == 1
+        assert "track_illegal_3" in counting.counted_tracks
+
+    def test_no_alert_when_data_logger_is_none(self):
+        """
+        data_logger is an optional dependency. When None (the case
+        for older tests and certain isolated usages), update_count
+        still suppresses the boarding correctly but skips alerting
+        rather than crashing. This keeps all existing tests passing.
+        """
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=None)
+        counting.initialize()
+        counting.passenger_count = counting.total_capacity
+        counting.available_seats = 0
+
+        counting.update_count(self._boarding_track("track_no_logger"))
+
+        assert counting.passenger_count == counting.total_capacity
+        assert "track_no_logger" in counting.counted_tracks
+
+
+class TestGhostAlightingAlert:
+    """
+    Tests covering the diagnostic warning raised when the AI detects
+    an alighting while passenger_count is already at zero. This is
+    almost always an AI false positive (camera saw a shadow, a
+    reflection, or motion that looked like a person exiting an
+    empty shuttle). Worth surfacing for diagnostics but lower
+    severity than the illegal-boarding case.
+
+    Same protective behaviour as the illegal-boarding alert:
+      1. Count stays at zero (no negative count corruption)
+      2. No passenger_event row written
+      3. Diagnostic logged with severity 'warning' (not 'error')
+      4. track_id marked as counted to prevent spam
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        """Clean test database state before each test."""
+        import sqlite3
+        import os
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        conn.commit()
+        conn.close()
+
+    def _alighting_track(self, track_id):
+        """
+        Build a track dict that represents an alighting direction.
+        previous_centroid below midpoint, current_centroid above
+        midpoint = exit motion.
+        """
+        return {
+            "track_id": track_id,
+            "previous_centroid": [400, 800],
+            "current_centroid": [400, 200],
+        }
+
+    def test_warning_raised_when_alighting_at_zero_count(self):
+        """
+        With passenger_count=0, an alighting detection should fire
+        a diagnostic with severity 'warning' (less severe than the
+        illegal-boarding 'error' because it's almost always an AI
+        false positive).
+        """
+        from unittest.mock import MagicMock
+        mock_logger = MagicMock()
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=mock_logger)
+        counting.initialize()
+        counting.passenger_count = 0
+
+        counting.update_count(self._alighting_track("ghost_1"))
+
+        mock_logger.log_diagnostic.assert_called_once()
+        # log_diagnostic takes a single dict argument
+        passed_dict = mock_logger.log_diagnostic.call_args.args[0]
+        assert passed_dict["log_type"] == "warning"
+
+    def test_count_never_goes_negative(self):
+        """
+        passenger_count must never drop below zero. The existing
+        safety guard is preserved — we're adding alerting on top of
+        it, not changing it.
+        """
+        from unittest.mock import MagicMock
+        mock_logger = MagicMock()
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=mock_logger)
+        counting.initialize()
+        counting.passenger_count = 0
+
+        counting.update_count(self._alighting_track("ghost_2"))
+
+        assert counting.passenger_count == 0
+
+    def test_ghost_alighting_marked_counted(self):
+        """
+        Same anti-spam protection as the illegal-boarding case —
+        track_id added to counted_tracks so we don't re-fire the
+        warning every frame for the same false positive.
+        """
+        from unittest.mock import MagicMock
+        mock_logger = MagicMock()
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=mock_logger)
+        counting.initialize()
+        counting.passenger_count = 0
+
+        track = self._alighting_track("ghost_3")
+        counting.update_count(track)
+        counting.update_count(track)
+
+        assert mock_logger.log_diagnostic.call_count == 1
+        assert "ghost_3" in counting.counted_tracks
+
+    def test_no_warning_when_data_logger_is_none(self):
+        """
+        Same graceful degradation as illegal-boarding: with no
+        data_logger, the count guard still works, no warning fires,
+        no crash.
+        """
+        counting = CountingLogic(db_path=self.TEST_DB, data_logger=None)
+        counting.initialize()
+        counting.passenger_count = 0
+
+        counting.update_count(self._alighting_track("ghost_no_logger"))
+
+        assert counting.passenger_count == 0
+        assert "ghost_no_logger" in counting.counted_tracks

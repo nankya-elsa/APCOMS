@@ -81,81 +81,31 @@ class FlaskDashboard:
 
     def check_end_of_day(self):
         """
-        Detects when the shuttle's service hours have ended for the day
-        and performs end-of-day reset: clears passenger count, resets
-        stop index, so the new service day starts fresh.
-        Runs on every dashboard refresh but only resets once per day.
+        Triggers the daily service-day reset if one is due.
+
+        Delegates entirely to ServiceDayManager which encapsulates
+        the decision (should_reset) and the action (perform_reset).
+        Called from render_dashboard on every dashboard load so the
+        reset fires the moment a new service day begins, regardless
+        of whether main.py has run yet.
+
+        The method name 'check_end_of_day' is preserved for backward
+        compatibility with existing callers, but the underlying
+        logic now resets at the START of the service day (default
+        06:00), not at the end. ServiceDayManager owns the full
+        semantics — see its module docstring for details.
         """
+        from service_day_manager import ServiceDayManager
 
         try:
-            conn = sqlite3.connect("local_database/apcoms.db")
-            cursor = conn.cursor()
-
-            # read day_end_time (default 24:00)
-            cursor.execute("SELECT value FROM system_state WHERE key='day_end_time'")
-            row = cursor.fetchone()
-            day_end = row[0] if row else "24:00"
-
-            # read last_reset_date
-            cursor.execute("SELECT value FROM system_state WHERE key='last_reset_date'")
-            row = cursor.fetchone()
-            last_reset_date = row[0] if row else None
-
-            # parse day_end
-            end_h, end_m = map(int, day_end.split(":"))
-            if end_h == 24:
-                end_h = 23
-                end_m = 59
-
-            now = datetime.datetime.now()
-            today_str = now.strftime("%Y-%m-%d")
-            today_end = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
-
-            # figure out the most recent day_end that should have triggered a reset
-            if now >= today_end:
-                most_recent_end_date = today_str
-            else:
-                yesterday = now - datetime.timedelta(days=1)
-                most_recent_end_date = yesterday.strftime("%Y-%m-%d")
-
-            # if we haven't reset for that day yet, do it now
-            if last_reset_date != most_recent_end_date:
-                logger.info(f"End of day detected - performing reset for {most_recent_end_date}")
-
-                # reset live state
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('current_count', '0')
-                """)
-
-                # read total_capacity to reset available_seats
-                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
-                cap_row = cursor.fetchone()
-                total_capacity = cap_row[0] if cap_row else "20"
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('available_seats', ?)
-                """, (total_capacity,))
-
-                # reset stop index back to first stop
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('current_stop_index', '0')
-                """)
-
-                # mark that we've reset for this date
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('last_reset_date', ?)
-                """, (most_recent_end_date,))
-
-                conn.commit()
-                logger.info("End of day reset completed successfully")
-
-            conn.close()
-
+            manager = ServiceDayManager(db_path="local_database/apcoms.db")
+            reset_date = manager.reset_if_needed()
+            if reset_date:
+                logger.info(
+                    f"Service-day reset performed for {reset_date}"
+                )
         except Exception as e:
-            logger.error(f"Error during end of day check: {e}")
+            logger.error(f"Error during service-day check: {e}")
 
     def render_dashboard(self):
         """
