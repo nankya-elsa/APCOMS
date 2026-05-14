@@ -26,6 +26,8 @@ import time
 import sqlite3
 import subprocess
 import logging
+import firebase_admin
+from firebase_admin import credentials, db
 
 from booking_validator import BookingValidator
 from qr_scanner import QRScanner
@@ -67,6 +69,93 @@ class ScannerOrchestrator:
         """
         self.db_path = db_path or "local_database/apcoms.db"
         self.shuttle_id = os.getenv("SHUTTLE_ID", "shuttle_001")
+
+    def _ensure_firebase(self):
+        """
+        Lazily initialize Firebase Admin SDK on first use.
+
+        Idempotent and safe to call repeatedly. Mirrors the pattern
+        used by BookingValidator, BookingCompleter, NoShowCanceller,
+        and BookingDashboardService so the whole counting module
+        shares one Firebase app and credential set.
+        """
+        if firebase_admin._apps:
+            return
+
+        cred_path = os.getenv(
+            "FIREBASE_CREDENTIALS_PATH", "serviceAccountKey.json"
+        )
+        database_url = os.getenv("FIREBASE_DATABASE_URL")
+
+        try:
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(
+                cred, {"databaseURL": database_url}
+            )
+            logger.info("Firebase initialized for ScannerOrchestrator")
+        except Exception as e:
+            logger.error(f"Failed to initialize Firebase: {e}")
+
+    def should_stop_here(self, stop):
+        """
+        Decide whether the shuttle should pause at the given stop
+        to run the scanner queue.
+
+        The shuttle physically visits every stop on its route (real
+        shuttles don't teleport). What this method controls is
+        whether we open the scanner queue and run main.py here, or
+        skip those costly steps and advance immediately.
+
+        A stop is worth pausing at if EITHER:
+          - A reserved booking has pickup_stop == this stop
+            (a passenger is waiting to board here)
+          - An active booking has destination_stop == this stop
+            (a passenger onboard is expecting to alight here)
+
+        On Firebase failure, returns True as a conservative
+        fallback: better to waste a few seconds at an empty stop
+        than to silently skip past a passenger waiting in real
+        life. Network glitches must never cause missed pickups.
+
+        Args:
+            stop: The shuttle stop name being evaluated.
+
+        Returns:
+            True if the shuttle should pause here, False if it
+            can pass through and advance immediately.
+        """
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(
+                f"Error querying bookings for stop check ({stop}): {e}"
+            )
+            return True  # safe fallback
+
+        if not all_bookings:
+            return False
+
+        for _, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+
+            status = booking.get("status")
+            pickup = booking.get("pickup_stop")
+            destination = booking.get("destination_stop")
+
+            # passenger waiting to board here
+            if status == "reserved" and pickup == stop:
+                return True
+            # passenger onboard expecting to alight here
+            if status == "active" and destination == stop:
+                return True
+
+        return False
 
     def read_current_stop(self):
         """
@@ -391,6 +480,19 @@ class ScannerOrchestrator:
                     f"Shuttle at stop: {current_stop}\n"
                     f"{'-' * 60}"
                 )
+
+                # SKIP-EMPTY-STOP CHECK: if no passengers are waiting
+                # to board AND nobody onboard is expecting to alight
+                if not self.should_stop_here(current_stop):
+                    logger.info(
+                        f"[SKIPPING] No pickups or alightings at "
+                        f"{current_stop} - passing through"
+                    )
+                    self.advance_and_sync()
+                    # brief pause so this isn't a tight loop that
+                    # blasts through 11 stops in milliseconds
+                    time.sleep(1)
+                    continue
 
                 # phase 1: scan the queue of boarding passengers
                 scan_count = self.run_scan_queue(current_stop)
