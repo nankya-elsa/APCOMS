@@ -992,6 +992,30 @@ class FlaskDashboard:
 
             return jsonify({"events": events, "total": len(events)})
 
+        @app.route("/api/all_bookings")
+        def api_all_bookings():
+            """
+            Lists every booking belonging to this shuttle for the
+            Live Bookings demo tab. Sorted newest-first. Returns
+            an empty list if Firebase is unreachable so the tab
+            renders gracefully even during outages.
+
+            This route powers a DEMO-ONLY view of bookings and is
+            not part of the production dashboard intended for
+            shuttle operators. It exists to give a panel viewer
+            an at-a-glance window into the booking flow during
+            the live demo without needing to open Firebase
+            console mid-presentation.
+            """
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import jsonify
+            from booking_dashboard_service import BookingDashboardService
+
+            service = BookingDashboardService()
+            bookings = service.list_all_bookings()
+            return jsonify({"bookings": bookings})
+
         @app.route("/api/booking_stats")
         def api_booking_stats():
             """

@@ -1551,3 +1551,219 @@ class TestGetAlightedAtStop:
         count = service.get_alighted_at_stop(stop="CONAS")
 
         assert count == 0
+
+
+class TestListAllBookings:
+    """
+    Tests covering the listing of all bookings for the demo-only
+    Live Bookings tab. Returns a list of dicts sorted by created_at
+    descending so the newest booking sits at the top of the table.
+
+    The list filters to bookings belonging to this shuttle and
+    converts created_at from Unix-ms to a readable timestamp the
+    dashboard can render directly.
+    """
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_all_bookings_for_this_shuttle(self, mock_db):
+        """
+        Bookings belonging to this shuttle are all returned
+        regardless of status. The demo viewer wants to see the
+        complete picture: reservations, active trips, completed
+        trips, and cancellations.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "Western Gate",
+                "destination_stop": "CONAS",
+                "created_at": 1747000000000,
+            },
+            "b2": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "pickup_stop": "CEDAT",
+                "destination_stop": "Main Library",
+                "created_at": 1747001000000,
+            },
+            "b3": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "pickup_stop": "Western Gate",
+                "destination_stop": "Africa Hall",
+                "created_at": 1746999000000,
+            },
+            "b4": {
+                "shuttle_key": "shuttle_001",
+                "status": "cancelled",
+                "pickup_stop": "Main Library",
+                "destination_stop": "COCIS",
+                "created_at": 1746998000000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert len(bookings) == 4
+
+    @patch("booking_dashboard_service.db")
+    def test_sorts_newest_first(self, mock_db):
+        """
+        Bookings come back sorted by created_at descending so the
+        most recently created booking is at index 0. This matches
+        the operator's expectation that the live activity is at the
+        top of the table.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "old_one": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "pickup_stop": "A", "destination_stop": "B",
+                "created_at": 1700000000000,
+            },
+            "new_one": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "C", "destination_stop": "D",
+                "created_at": 1747000000000,
+            },
+            "middle_one": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "pickup_stop": "E", "destination_stop": "F",
+                "created_at": 1730000000000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert bookings[0]["booking_id"] == "new_one"
+        assert bookings[1]["booking_id"] == "middle_one"
+        assert bookings[2]["booking_id"] == "old_one"
+
+    @patch("booking_dashboard_service.db")
+    def test_filters_by_shuttle_id(self, mock_db):
+        """
+        Bookings on OTHER shuttles must not appear in this
+        shuttle's Live Bookings tab.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "mine": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "A", "destination_stop": "B",
+                "created_at": 1747000000000,
+            },
+            "theirs": {
+                "shuttle_key": "shuttle_002",
+                "status": "reserved",
+                "pickup_stop": "A", "destination_stop": "B",
+                "created_at": 1747001000000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert len(bookings) == 1
+        assert bookings[0]["booking_id"] == "mine"
+
+    @patch("booking_dashboard_service.db")
+    def test_includes_required_fields(self, mock_db):
+        """
+        Each returned booking dict contains the fields the dashboard
+        template renders: booking_id, pickup_stop, destination_stop,
+        status, and a human-readable created_at_display string.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "Western Gate",
+                "destination_stop": "CONAS",
+                "created_at": 1747000000000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert "booking_id" in bookings[0]
+        assert "pickup_stop" in bookings[0]
+        assert "destination_stop" in bookings[0]
+        assert "status" in bookings[0]
+        assert "created_at_display" in bookings[0]
+        # readable timestamp string, not raw ms
+        assert isinstance(bookings[0]["created_at_display"], str)
+
+    @patch("booking_dashboard_service.db")
+    def test_handles_missing_created_at_gracefully(self, mock_db):
+        """
+        Bookings without created_at (e.g. legacy data from before
+        the field existed) still appear in the list but sort to the
+        end since their sort key is treated as 0. The display
+        string for missing values is a placeholder.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "legacy": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "pickup_stop": "A", "destination_stop": "B",
+            },
+            "modern": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "C", "destination_stop": "D",
+                "created_at": 1747000000000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert len(bookings) == 2
+        assert bookings[0]["booking_id"] == "modern"
+        assert bookings[1]["booking_id"] == "legacy"
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_empty_list_when_no_bookings(self, mock_db):
+        """
+        Fresh deployment with zero bookings — return empty list
+        cleanly. The dashboard renders an empty-state placeholder.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = None
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert bookings == []
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_empty_list_on_firebase_error(self, mock_db):
+        """
+        Firebase failure returns an empty list. The dashboard
+        continues to render normally without crashing.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.side_effect = Exception("Firebase down")
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        bookings = service.list_all_bookings()
+
+        assert bookings == []

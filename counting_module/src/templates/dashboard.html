@@ -56,6 +56,9 @@
       <button class="tab-btn" onclick="switchTab('settings', this)">
         Settings
       </button>
+      <button class="tab-btn" onclick="switchTab('bookings', this)">
+        Live Bookings
+      </button>
     </div>
 
     <div class="content">
@@ -67,6 +70,9 @@
 
       <!-- TAB 3: SETTINGS -->
       {% include '_settings_tab.html' %}
+
+      <!-- TAB 4: LIVE BOOKINGS (demo only) -->
+      {% include '_bookings_tab.html' %}
     </div>
 
     <!-- Dashboard scripts (order matters — shared utilities first) -->
@@ -74,5 +80,6 @@
     <script src="{{ url_for('static', filename='js/monitoring.js') }}"></script>
     <script src="{{ url_for('static', filename='js/analytics.js') }}"></script>
     <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/bookings.js') }}"></script>
   </body>
 </html>
