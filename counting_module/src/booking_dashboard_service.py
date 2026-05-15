@@ -59,7 +59,7 @@ class BookingDashboardService:
                     fallback to 'shuttle_001'.
     """
 
-    def __init__(self, shuttle_id=None):
+    def __init__(self, shuttle_id=None, db_path=None):
         """
         Initialize the BookingDashboardService.
 
@@ -67,10 +67,16 @@ class BookingDashboardService:
             shuttle_id: Optional override for the shuttle ID.
                         Defaults to the SHUTTLE_ID environment
                         variable or 'shuttle_001' if unset.
+            db_path:    Optional override for the SQLite database
+                        path. Used by get_alighted_at_stop() to read
+                        the current_stop_arrived_at_ms timestamp.
+                        Defaults to the production database; tests
+                        override this to isolate.
         """
         self.shuttle_id = shuttle_id or os.getenv(
             "SHUTTLE_ID", "shuttle_001"
         )
+        self.db_path = db_path or "local_database/apcoms.db"
         self._firebase_ready = False
 
     def _ensure_firebase(self):
@@ -204,6 +210,176 @@ class BookingDashboardService:
                 continue
             if booking.get("pickup_stop") != stop:
                 continue
+            count += 1
+
+        return count
+
+    def get_alightings_expected(self, stop):
+        """
+        Count active bookings whose destination is the given stop.
+
+        Queries /bookings/ in Firebase and counts entries where:
+          - shuttle_key matches this shuttle
+          - status is exactly 'active' (not reserved/completed/cancelled)
+          - destination_stop matches the given stop
+
+        These are passengers currently onboard who chose this stop
+        as their drop-off point. By counting only 'active' bookings,
+        the count is self-resetting between shuttle visits — once
+        passengers alight, their status flips to 'completed' and
+        they're excluded from this count. So when the shuttle
+        approaches the same stop on a later loop, only the new
+        wave of passengers expecting to alight there is counted.
+
+        Returns 0 on any failure (empty database, network error,
+        permission issue) so the dashboard never crashes — it just
+        displays zero, which is the correct empty-state.
+
+        Args:
+            stop: The shuttle stop name to query for.
+
+        Returns:
+            Integer count of active bookings with destination_stop=stop
+            for this shuttle. Always non-negative.
+        """
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(f"Error querying bookings: {e}")
+            return 0
+
+        if not all_bookings:
+            return 0
+
+        count = 0
+        for _, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+            if booking.get("status") != "active":
+                continue
+            if booking.get("destination_stop") != stop:
+                continue
+            count += 1
+
+        return count
+
+    def get_alighted_at_stop(self, stop):
+        """
+        Count bookings that have actually completed at the given
+        stop DURING the current visit.
+
+        The "current visit" boundary is critical because the shuttle
+        loops through stops all day. A booking completed at CONAS
+        in the morning trip must NOT be counted again when the
+        shuttle returns to CONAS in the afternoon. Self-scoping is
+        achieved by:
+
+          1. Reading current_stop_arrived_at_ms from SQLite — the
+             Unix timestamp recorded by advance_and_sync when the
+             shuttle pulled up at this stop.
+          2. Including only completions whose completed_at >=
+             current_stop_arrived_at_ms (within this specific visit).
+          3. As a belt-and-suspenders safety net, also requiring
+             the completion's date to match current_stop_arrived_date
+             (today's date). This guarantees yesterday's data never
+             pollutes today's counts even if the timestamp logic
+             somehow fails.
+
+        Returns 0 when:
+          - The arrival timestamp hasn't been written yet (fresh
+            deployment, before any stop transition)
+          - Firebase is unreachable
+          - No completed bookings match the query
+
+        Args:
+            stop: The shuttle stop name to query for.
+
+        Returns:
+            Integer count of completed bookings with
+            destination_stop=stop, completed during the current
+            visit. Always non-negative.
+        """
+        import sqlite3
+        import datetime
+
+        # read the arrival timestamp + date from SQLite. if either
+        # is missing, return 0 cleanly — the shuttle hasn't had
+        # its first stop transition yet, so there are no in-visit
+        # completions by definition.
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM system_state "
+                "WHERE key='current_stop_arrived_at_ms'"
+            )
+            row = cursor.fetchone()
+            arrived_at_ms = int(row[0]) if row else None
+
+            cursor.execute(
+                "SELECT value FROM system_state "
+                "WHERE key='current_stop_arrived_date'"
+            )
+            row = cursor.fetchone()
+            arrived_date = row[0] if row else None
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error reading arrival state: {e}")
+            return 0
+
+        if arrived_at_ms is None or arrived_date is None:
+            return 0
+
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(f"Error querying bookings: {e}")
+            return 0
+
+        if not all_bookings:
+            return 0
+
+        count = 0
+        for _, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+            if booking.get("status") != "completed":
+                continue
+            if booking.get("destination_stop") != stop:
+                continue
+
+            completed_at = booking.get("completed_at")
+            if completed_at is None:
+                continue
+
+            # current-visit guard: completed must be at or after the
+            # shuttle's arrival at this stop
+            if completed_at < arrived_at_ms:
+                continue
+
+            # date safety net: completion's calendar date must match
+            # the arrival date. converts unix-ms to YYYY-MM-DD for
+            # comparison.
+            try:
+                completed_date = datetime.datetime.fromtimestamp(
+                    completed_at / 1000
+                ).strftime("%Y-%m-%d")
+            except (ValueError, OSError):
+                continue
+
+            if completed_date != arrived_date:
+                continue
+
             count += 1
 
         return count

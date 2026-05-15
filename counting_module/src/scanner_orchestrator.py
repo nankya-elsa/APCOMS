@@ -389,6 +389,42 @@ class ScannerOrchestrator:
         }
 
         firebase.sync_to_firebase(payload)
+
+        # Record arrival timestamp + date for this visit. Downstream
+        # queries (Alightings Expected / Alighted Here cards) use
+        # these values to count ONLY bookings completed during the
+        # current visit, not previous visits earlier in the day.
+        # The date is a belt-AND-suspenders safety net: even if
+        # the timestamp logic somehow fails (e.g. shuttle restarts
+        # mid-day with stale timestamp), the date filter still
+        # excludes yesterday's data.
+        try:
+            import datetime
+            now = datetime.datetime.now()
+            arrived_at_ms = int(now.timestamp() * 1000)
+            arrived_date = now.strftime("%Y-%m-%d")
+
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('current_stop_arrived_at_ms', ?)
+                """,
+                (str(arrived_at_ms),),
+            )
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('current_stop_arrived_date', ?)
+                """,
+                (arrived_date,),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to record stop arrival timestamp: {e}")
+
         logger.info(
             f"Shuttle advanced to {current_stop}, next stop: {next_stop}"
         )

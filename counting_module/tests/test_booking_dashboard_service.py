@@ -1087,3 +1087,467 @@ class TestNoShowRateWithDateFilter:
         assert conas_filtered["total"] == 1
         assert conas_filtered["no_shows"] == 0
         assert conas_filtered["rate"] == 0.0
+
+
+class TestGetAlightingsExpected:
+    """
+    Tests covering the count of bookings currently onboard whose
+    destination is the given stop.
+
+    These are passengers expected to alight HERE. By counting only
+    bookings with status 'active' (not 'completed', not 'reserved'),
+    we get a self-resetting count that automatically refreshes when
+    the shuttle moves to a new stop — once they alight, status flips
+    to 'completed' and they're excluded.
+    """
+
+    @patch("booking_dashboard_service.db")
+    def test_counts_only_active_with_destination(self, mock_db):
+        """
+        Only bookings with status 'active' AND destination_stop
+        matching the given stop are counted. Reserved bookings are
+        excluded because those passengers haven't boarded yet — they
+        can't alight if they haven't boarded. Completed bookings are
+        excluded because those passengers have already alighted.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "CONAS",
+            },
+            "b2": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "CONAS",
+            },
+            "b3": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "destination_stop": "CONAS",
+            },
+            "b4": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "destination_stop": "CONAS",
+            },
+            "b5": {
+                "shuttle_key": "shuttle_001",
+                "status": "cancelled",
+                "destination_stop": "CONAS",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        count = service.get_alightings_expected(stop="CONAS")
+
+        assert count == 2
+
+    @patch("booking_dashboard_service.db")
+    def test_excludes_other_destinations(self, mock_db):
+        """
+        Active bookings with a different destination_stop must not
+        be counted at this stop. Confirms the destination_stop
+        filter is correctly applied.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "Main Library",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        count = service.get_alightings_expected(stop="CONAS")
+
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_filters_by_shuttle_id(self, mock_db):
+        """
+        Active bookings on OTHER shuttles destined here must not be
+        counted on this shuttle's dashboard. Critical for
+        multi-shuttle accuracy.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "CONAS",
+            },
+            "b2": {
+                "shuttle_key": "shuttle_002",
+                "status": "active",
+                "destination_stop": "CONAS",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        count = service.get_alightings_expected(stop="CONAS")
+
+        assert count == 1
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_zero_when_nobody_alighting_here(self, mock_db):
+        """
+        When all active bookings have OTHER destinations (passengers
+        are onboard but none of them want to alight at this stop),
+        the count is 0. Honestly empty card so the operator knows
+        nobody is alighting here.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "Main Library",
+            },
+            "b2": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "Africa Hall",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        count = service.get_alightings_expected(stop="CONAS")
+
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_zero_when_firebase_empty(self, mock_db):
+        """
+        Fresh deployment with zero bookings — return 0 cleanly
+        without crashing.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = None
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        count = service.get_alightings_expected(stop="CONAS")
+
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_zero_on_firebase_error(self, mock_db):
+        """
+        Firebase failure must not crash the dashboard. Return 0
+        cleanly so the card displays zero while the rest of the
+        dashboard continues operating.
+        """
+        mock_ref = MagicMock()
+        mock_ref.get.side_effect = Exception("Firebase down")
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(shuttle_id="shuttle_001")
+        count = service.get_alightings_expected(stop="CONAS")
+
+        assert count == 0
+
+
+class TestGetAlightedAtStop:
+    """
+    Tests covering the count of bookings that have actually
+    completed (passenger alighted) at the given stop DURING the
+    current visit.
+
+    The "current visit" boundary is critical because the shuttle
+    loops through stops all day. A booking completed at CONAS in
+    the morning trip must NOT be counted again when the shuttle
+    returns to CONAS in the afternoon trip. Self-scoping is
+    achieved by comparing the booking's completed_at timestamp
+    against current_stop_arrived_at_ms (read from SQLite) — only
+    completions that happened during this specific visit count.
+
+    A second guard uses current_stop_arrived_date (also from
+    SQLite) to filter by calendar date. This is a belt-and-
+    suspenders safety net: even if the timestamp logic somehow
+    fails (e.g. orchestrator restarts mid-day with stale
+    timestamp from yesterday), the date filter still excludes
+    yesterday's data.
+    """
+
+    def setup_method(self):
+        """Set up a clean SQLite database for each test."""
+        import os
+        import sqlite3
+        os.makedirs("local_database", exist_ok=True)
+        self.test_db = "local_database/test_apcoms.db"
+        conn = sqlite3.connect(self.test_db)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute("DELETE FROM system_state")
+        conn.commit()
+        conn.close()
+
+    def _seed_arrival(self, arrived_at_ms, arrived_date):
+        """Helper to seed the arrival timestamp + date into SQLite."""
+        import sqlite3
+        conn = sqlite3.connect(self.test_db)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) "
+            "VALUES ('current_stop_arrived_at_ms', ?)",
+            (str(arrived_at_ms),)
+        )
+        cursor.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) "
+            "VALUES ('current_stop_arrived_date', ?)",
+            (arrived_date,)
+        )
+        conn.commit()
+        conn.close()
+
+    @patch("booking_dashboard_service.db")
+    def test_counts_completions_within_current_visit(self, mock_db):
+        """
+        Completions that happened AFTER the arrival timestamp (i.e.
+        during this visit) are counted. The arrival timestamp is
+        seeded into SQLite by advance_and_sync; this test mocks it.
+        """
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        # arrival was 5 minutes ago
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        arrived_at_ms = now_ms - 5 * 60 * 1000  # 5 min before now
+        self._seed_arrival(arrived_at_ms, today)
+
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 2 * 60 * 1000,  # 2 min ago, within visit
+            },
+            "b2": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 1 * 60 * 1000,  # 1 min ago, within visit
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        assert count == 2
+
+    @patch("booking_dashboard_service.db")
+    def test_excludes_completions_before_current_visit(self, mock_db):
+        """
+        Completions BEFORE the arrival timestamp are excluded. This
+        is the core "previous visits don't pollute current visit"
+        guard. A booking completed at CONAS this morning must NOT
+        be counted when the shuttle returns to CONAS this afternoon.
+        """
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        # arrival was 5 minutes ago
+        arrived_at_ms = now_ms - 5 * 60 * 1000
+        self._seed_arrival(arrived_at_ms, today)
+
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            # this one completed 30 min ago, BEFORE we arrived
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 30 * 60 * 1000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_excludes_completions_from_yesterday_via_date_guard(
+        self, mock_db
+    ):
+        """
+        Even if a booking's completed_at timestamp happens to be
+        AFTER current_stop_arrived_at_ms (e.g. stale timestamp), the
+        date safety net excludes completions whose date doesn't
+        match current_stop_arrived_date. This guarantees yesterday's
+        data never pollutes today's counts.
+        """
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        # seed arrival as today
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        self._seed_arrival(now_ms - 5 * 60 * 1000, today)
+
+        # but the completed booking has YESTERDAY's date
+        # (its completed_at timestamp could still be "after" our
+        # arrival because of some clock weirdness, but the date
+        # check should still reject it)
+        yesterday = (
+            datetime.datetime.now() - datetime.timedelta(days=1)
+        )
+        yesterday_ms = int(yesterday.timestamp() * 1000)
+
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "destination_stop": "CONAS",
+                "completed_at": yesterday_ms,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        # yesterday's completion excluded by both timestamp AND date
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_excludes_non_completed_statuses(self, mock_db):
+        """
+        Only bookings with status 'completed' are counted. Active
+        bookings haven't alighted yet; reserved bookings haven't
+        even boarded yet; cancelled bookings never trip.
+        """
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        arrived_at_ms = now_ms - 5 * 60 * 1000
+        self._seed_arrival(arrived_at_ms, today)
+
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 1 * 60 * 1000,
+            },
+            "b2": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 1 * 60 * 1000,
+            },
+            "b3": {
+                "shuttle_key": "shuttle_001",
+                "status": "cancelled",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 1 * 60 * 1000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_filters_by_shuttle_id(self, mock_db):
+        """
+        Completions on OTHER shuttles must not be counted on this
+        shuttle's dashboard.
+        """
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        arrived_at_ms = now_ms - 5 * 60 * 1000
+        self._seed_arrival(arrived_at_ms, today)
+
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 1 * 60 * 1000,
+            },
+            "b2": {
+                "shuttle_key": "shuttle_002",
+                "status": "completed",
+                "destination_stop": "CONAS",
+                "completed_at": now_ms - 1 * 60 * 1000,
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        assert count == 1
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_zero_when_arrival_state_missing(self, mock_db):
+        """
+        If current_stop_arrived_at_ms hasn't been written yet
+        (e.g. fresh deployment, advance_and_sync never called),
+        the method returns 0 cleanly rather than crashing. The
+        dashboard simply shows zero alightings until the first
+        stop transition.
+        """
+        # don't seed arrival — system_state is empty
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {}
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        assert count == 0
+
+    @patch("booking_dashboard_service.db")
+    def test_returns_zero_on_firebase_error(self, mock_db):
+        """
+        Firebase failure must not crash the dashboard. Return 0
+        cleanly so the card displays zero while the rest of the
+        dashboard continues operating.
+        """
+        import datetime
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        self._seed_arrival(now_ms - 5 * 60 * 1000, today)
+
+        mock_ref = MagicMock()
+        mock_ref.get.side_effect = Exception("Firebase down")
+        mock_db.reference.return_value = mock_ref
+
+        service = BookingDashboardService(
+            shuttle_id="shuttle_001", db_path=self.test_db
+        )
+        count = service.get_alighted_at_stop(stop="CONAS")
+
+        assert count == 0
