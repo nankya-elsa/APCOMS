@@ -309,7 +309,8 @@ def main():
             ai_view = draw_ai_visualization(
                 frame, tracks, counting_logic, occupancy["current_stop"]
             )
-            cv2.imshow("APCOMS - AI Counter", ai_view)
+            ai_view_resized = cv2.resize(ai_view, (960, 540))
+            cv2.imshow("APCOMS - AI Counter", ai_view_resized)
 
             # update OLED display
             display.show(occupancy, system_status=status["system_status"])
