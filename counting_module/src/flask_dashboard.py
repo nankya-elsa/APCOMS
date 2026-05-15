@@ -244,13 +244,14 @@ class FlaskDashboard:
                     "latency_ms": row[5]
                 })
 
-            # today's summary - use last_reset_date as cutoff so summary aligns with service day
-            cursor.execute("SELECT value FROM system_state WHERE key='last_reset_date'")
+            # today's summary - use last_reset_date as the cutoff so
+            # the summary aligns with the current service day.
+            cursor.execute(
+                "SELECT value FROM system_state WHERE key='last_reset_date'"
+            )
             reset_row = cursor.fetchone()
             if reset_row:
-                # use the day after last reset as the start of "today's" service day
-                last_reset = datetime.datetime.strptime(reset_row[0], "%Y-%m-%d")
-                cutoff = (last_reset + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+                cutoff = reset_row[0]
             else:
                 cutoff = datetime.datetime.now().strftime("%Y-%m-%d")
 
@@ -289,11 +290,17 @@ class FlaskDashboard:
         except Exception:
             pass
 
+        display_end = "23:59" if day_end == "24:00" else day_end
+
         return {
             "occupancy": occupancy,
             "system_status": system_status,
             "diagnostic_logs": diagnostic_logs,
-            "today_summary": today_summary
+            "today_summary": today_summary,
+            "service_hours": {
+                "start": day_start,
+                "end": display_end,
+            },
         }
 
     def generate_analytics(self, start_date=None, end_date=None, start_time=None, end_time=None):
@@ -669,9 +676,11 @@ class FlaskDashboard:
                 return redirect(url_for("login"))
             data = self.render_dashboard()
             analytics = self.generate_analytics()
-            # get list of stops for export dropdown
+            # get list of stops for export dropdown and total_capacity
+            # for the Settings tab display-only fields
             import sqlite3, json
             stops = []
+            total_capacity = 20
             try:
                 conn = sqlite3.connect("local_database/apcoms.db")
                 cursor = conn.cursor()
@@ -679,6 +688,10 @@ class FlaskDashboard:
                 row = cursor.fetchone()
                 if row:
                     stops = json.loads(row[0])
+                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
+                row = cursor.fetchone()
+                if row:
+                    total_capacity = int(row[0])
                 conn.close()
             except Exception:
                 pass
@@ -692,7 +705,8 @@ class FlaskDashboard:
             return render_template("dashboard.html",
                                 data=data,
                                 analytics=analytics,
-                                stops=stops)
+                                stops=stops,
+                                total_capacity=total_capacity)
 
         @app.route("/export")
         def export():
@@ -721,11 +735,155 @@ class FlaskDashboard:
 
         @app.route("/reset_count", methods=["POST"])
         def reset_count():
+            """
+            Emergency reset of the live passenger count to zero.
+
+            Writes current_count=0 and available_seats=total_capacity
+            back to SQLite system_state. Also syncs the new state to
+            Firebase so the mobile app reflects the reset immediately.
+
+            Logs a diagnostic entry of severity 'warning' because a
+            manual count reset is an operational override worth
+            keeping in the audit trail — operators should be able to
+            look back later and see when/why a reset happened.
+
+            Historical tables (passenger_events, diagnostic_log) are
+            never wiped — those are sacred records.
+            """
             if "logged_in" not in session:
                 return redirect(url_for("login"))
             from flask import jsonify
-            logger.info("Count reset by administrator")
-            return jsonify({"status": "success", "message": "Count reset successfully"})
+            import sqlite3
+
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+
+                # read total_capacity to restore available_seats
+                cursor.execute(
+                    "SELECT value FROM system_state "
+                    "WHERE key='total_capacity'"
+                )
+                row = cursor.fetchone()
+                total_capacity = int(row[0]) if row else 20
+
+                # write fresh count + seats
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('current_count', '0')
+                    """
+                )
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('available_seats', ?)
+                    """,
+                    (str(total_capacity),),
+                )
+                conn.commit()
+                conn.close()
+
+                # write a diagnostic audit log via DataLogger so the
+                # reset shows up in the Recent Diagnostic Logs panel
+                try:
+                    from data_logger import DataLogger
+                    import os as _os
+                    data_logger = DataLogger(
+                        shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+                    )
+                    data_logger.initialize()
+                    data_logger.log_diagnostic({
+                        "log_type": "warning",
+                        "message": (
+                            "Manual count reset performed by administrator"
+                        ),
+                    })
+                except Exception as audit_err:
+                    logger.error(
+                        f"Failed to log reset audit entry: {audit_err}"
+                    )
+
+                # push new occupancy to Firebase so mobile app updates.
+                # read current_stop from SQLite and compute next_stop
+                # from the designated_stops list so Firebase reflects
+                # the shuttle's actual location, not a "Unknown" stub.
+                try:
+                    import json as _json
+                    conn = sqlite3.connect("local_database/apcoms.db")
+                    cursor = conn.cursor()
+
+                    cursor.execute(
+                        "SELECT value FROM system_state "
+                        "WHERE key='current_stop'"
+                    )
+                    row = cursor.fetchone()
+                    current_stop = row[0] if row else "Western Gate"
+
+                    cursor.execute(
+                        "SELECT value FROM system_state "
+                        "WHERE key='current_stop_index'"
+                    )
+                    row = cursor.fetchone()
+                    current_stop_index = int(row[0]) if row else 0
+
+                    cursor.execute(
+                        "SELECT value FROM system_state "
+                        "WHERE key='designated_stops'"
+                    )
+                    row = cursor.fetchone()
+                    stops = []
+                    if row:
+                        try:
+                            stops = _json.loads(row[0])
+                        except Exception:
+                            pass
+                    conn.close()
+
+                    if not stops:
+                        stops = [
+                            "Western Gate", "CEDAT", "CONAS",
+                            "Main Library", "Africa Hall",
+                            "Swimming Pool", "Mitchel Hall",
+                            "COCIS", "Complex Hall", "CEES",
+                            "Lumumba Hall",
+                        ]
+
+                    next_index = (current_stop_index + 1) % len(stops)
+                    next_stop = stops[next_index]
+
+                    from firebase_sync import FirebaseSyncComponent
+                    import os as _os
+                    firebase = FirebaseSyncComponent(
+                        shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+                    )
+                    firebase.initialize()
+                    firebase.sync_to_firebase({
+                        "passenger_count": 0,
+                        "available_seats": total_capacity,
+                        "occupancy_status": "Available",
+                        "current_stop": current_stop,
+                        "next_stop": next_stop,
+                    })
+                except Exception as fb_err:
+                    logger.error(
+                        f"Failed to push reset to Firebase: {fb_err}"
+                    )
+
+                logger.info(
+                    "Count reset to zero by administrator "
+                    f"(available_seats={total_capacity})"
+                )
+                return jsonify({
+                    "status": "success",
+                    "message": "Count reset successfully",
+                })
+            except Exception as e:
+                logger.error(f"Reset count failed: {e}")
+                return jsonify({
+                    "status": "error",
+                    "message": str(e),
+                }), 500
 
         @app.route("/setup_shuttle", methods=["POST"])
         def setup_shuttle_route():
