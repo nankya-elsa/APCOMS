@@ -643,6 +643,7 @@ class TestRunMainLoop:
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
+    @patch.object(ScannerOrchestrator, "has_pickups_here")
     @patch.object(ScannerOrchestrator, "should_stop_here")
     @patch.object(ScannerOrchestrator, "read_current_stop")
     @patch("builtins.input")
@@ -651,15 +652,17 @@ class TestRunMainLoop:
         mock_input,
         mock_read_stop,
         mock_should_stop,
+        mock_has_pickups,
         mock_run_queue,
         mock_advance,
         mock_subprocess,
     ):
         """
         A complete cycle through run() should: read the current
-        stop, confirm the stop is worth pausing at, run the scan
-        queue, launch main.py and wait for it to finish, advance
-        to the next stop, and prompt the operator before looping.
+        stop, confirm the stop is worth pausing at, confirm there
+        are pickups at this stop, run the scan queue, launch
+        main.py and wait for it to finish, advance to the next
+        stop, and prompt the operator before looping.
 
         We force the loop to exit after one full cycle by raising
         KeyboardInterrupt from input() — simulating the operator
@@ -667,6 +670,7 @@ class TestRunMainLoop:
         """
         mock_read_stop.return_value = "Western Gate"
         mock_should_stop.return_value = True  # passengers are waiting
+        mock_has_pickups.return_value = True  # scanner should open
         mock_run_queue.return_value = 3  # 3 passengers boarded
         mock_input.side_effect = KeyboardInterrupt()
 
@@ -686,6 +690,7 @@ class TestRunMainLoop:
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
+    @patch.object(ScannerOrchestrator, "has_pickups_here")
     @patch.object(ScannerOrchestrator, "should_stop_here")
     @patch.object(ScannerOrchestrator, "read_current_stop")
     @patch("builtins.input")
@@ -694,6 +699,7 @@ class TestRunMainLoop:
         mock_input,
         mock_read_stop,
         mock_should_stop,
+        mock_has_pickups,
         mock_run_queue,
         mock_advance,
         mock_subprocess,
@@ -708,6 +714,7 @@ class TestRunMainLoop:
         # up the new value after advance_and_sync wrote it)
         mock_read_stop.side_effect = ["Western Gate", "CEDAT"]
         mock_should_stop.return_value = True  # both stops have activity
+        mock_has_pickups.return_value = True  # both have pickups
         mock_run_queue.return_value = 2
         # Enter pressed once, then Ctrl+C the second time
         mock_input.side_effect = ["", KeyboardInterrupt()]
@@ -724,6 +731,7 @@ class TestRunMainLoop:
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
+    @patch.object(ScannerOrchestrator, "has_pickups_here")
     @patch.object(ScannerOrchestrator, "should_stop_here")
     @patch.object(ScannerOrchestrator, "read_current_stop")
     @patch("builtins.input")
@@ -734,6 +742,7 @@ class TestRunMainLoop:
         mock_input,
         mock_read_stop,
         mock_should_stop,
+        mock_has_pickups,
         mock_run_queue,
         mock_advance,
         mock_subprocess,
@@ -752,6 +761,7 @@ class TestRunMainLoop:
         # two iterations: first empty stop, second has passengers
         mock_read_stop.side_effect = ["Western Gate", "CEDAT"]
         mock_should_stop.side_effect = [False, True]
+        mock_has_pickups.return_value = True  # CEDAT has pickups
         mock_run_queue.return_value = 1
         mock_input.side_effect = KeyboardInterrupt()
 
@@ -798,6 +808,47 @@ class TestRunMainLoop:
             orchestrator.run()
         except KeyboardInterrupt:
             pytest.fail("run() should catch KeyboardInterrupt internally")
+
+    @patch("scanner_orchestrator.subprocess.run")
+    @patch.object(ScannerOrchestrator, "advance_and_sync")
+    @patch.object(ScannerOrchestrator, "run_scan_queue")
+    @patch.object(ScannerOrchestrator, "has_pickups_here")
+    @patch.object(ScannerOrchestrator, "should_stop_here")
+    @patch.object(ScannerOrchestrator, "read_current_stop")
+    @patch("builtins.input")
+    def test_run_skips_scanner_for_alighting_only_stop(
+        self,
+        mock_input,
+        mock_read_stop,
+        mock_should_stop,
+        mock_has_pickups,
+        mock_run_queue,
+        mock_advance,
+        mock_subprocess,
+    ):
+        """
+        At an alighting-only stop (passengers want to leave but
+        nobody is boarding), the orchestrator must:
+          - NOT open the scanner queue
+          - STILL launch main.py so the AI counts the alightings
+          - advance normally afterwards
+
+        Verifies the new alighting-only branch in run().
+        """
+        mock_read_stop.return_value = "Main Library"
+        mock_should_stop.return_value = True
+        mock_has_pickups.return_value = False  # alighting-only stop
+        mock_input.side_effect = KeyboardInterrupt()
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        orchestrator.run()
+
+        # scanner queue NEVER opened
+        mock_run_queue.assert_not_called()
+        # main.py still launched for AI counting
+        mock_subprocess.assert_called_once()
+        # advance still happened
+        mock_advance.assert_called_once()
 
 
 class TestShouldStopHere:
@@ -969,3 +1020,178 @@ class TestShouldStopHere:
         result = orchestrator.should_stop_here("CONAS")
 
         assert result is False
+
+
+class TestHasPickupsHere:
+    """
+    Tests covering the narrower check that distinguishes pickup
+    stops from alighting-only stops.
+
+    should_stop_here() returns True for EITHER pickups OR alightings.
+    has_pickups_here() returns True ONLY when there is at least one
+    reserved booking with pickup_stop == this stop. Used by run()
+    to decide whether to open the scanner queue:
+      - Pickups present  -> open scanner queue (passengers will scan)
+      - Pickups absent   -> skip scanner queue (alighting only, no
+                            scanner action needed; AI counts the
+                            passengers leaving the shuttle)
+    """
+
+    @patch("scanner_orchestrator.firebase_admin")
+    @patch("scanner_orchestrator.db")
+    def test_returns_true_when_reserved_pickup_at_stop(
+        self, mock_db, mock_admin
+    ):
+        """
+        A reserved booking with pickup_stop matching this stop
+        means a passenger is waiting to scan. Scanner queue must
+        open.
+        """
+        mock_admin._apps = ["existing_app"]
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "CONAS",
+                "destination_stop": "Main Library",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        result = orchestrator.has_pickups_here("CONAS")
+
+        assert result is True
+
+    @patch("scanner_orchestrator.firebase_admin")
+    @patch("scanner_orchestrator.db")
+    def test_returns_false_for_alighting_only_stop(
+        self, mock_db, mock_admin
+    ):
+        """
+        A stop with active bookings DESTINED here but no reserved
+        pickup bookings is an alighting-only stop. The shuttle
+        should NOT open the scanner queue here — nobody is going
+        to scan. The AI handles the alightings visually.
+        """
+        mock_admin._apps = ["existing_app"]
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "pickup_stop": "Western Gate",
+                "destination_stop": "CONAS",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        result = orchestrator.has_pickups_here("CONAS")
+
+        assert result is False
+
+    @patch("scanner_orchestrator.firebase_admin")
+    @patch("scanner_orchestrator.db")
+    def test_returns_false_when_no_bookings_match(self, mock_db, mock_admin):
+        """
+        No reserved pickup at this stop AND no destination match
+        either - just returns False. Used in skip-empty-stop case
+        but also caller in run() needs the False to detect.
+        """
+        mock_admin._apps = ["existing_app"]
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "Main Library",
+                "destination_stop": "CEDAT",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        result = orchestrator.has_pickups_here("CONAS")
+
+        assert result is False
+
+    @patch("scanner_orchestrator.firebase_admin")
+    @patch("scanner_orchestrator.db")
+    def test_ignores_non_reserved_statuses(self, mock_db, mock_admin):
+        """
+        Only 'reserved' bookings indicate a pending scan. Active
+        bookings have already scanned. Completed and cancelled
+        bookings can't scan. Only 'reserved' status counts.
+        """
+        mock_admin._apps = ["existing_app"]
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b1": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "pickup_stop": "CONAS",
+                "destination_stop": "Main Library",
+            },
+            "b2": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+                "pickup_stop": "CONAS",
+                "destination_stop": "Main Library",
+            },
+            "b3": {
+                "shuttle_key": "shuttle_001",
+                "status": "cancelled",
+                "pickup_stop": "CONAS",
+                "destination_stop": "Main Library",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        result = orchestrator.has_pickups_here("CONAS")
+
+        assert result is False
+
+    @patch("scanner_orchestrator.firebase_admin")
+    @patch("scanner_orchestrator.db")
+    def test_filters_by_shuttle_id(self, mock_db, mock_admin):
+        """
+        Reserved bookings on OTHER shuttles must not trigger this
+        shuttle's scanner. Critical for multi-shuttle deployments.
+        """
+        mock_admin._apps = ["existing_app"]
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "b_other": {
+                "shuttle_key": "shuttle_002",
+                "status": "reserved",
+                "pickup_stop": "CONAS",
+                "destination_stop": "Main Library",
+            },
+        }
+        mock_db.reference.return_value = mock_ref
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        result = orchestrator.has_pickups_here("CONAS")
+
+        assert result is False
+
+    @patch("scanner_orchestrator.firebase_admin")
+    @patch("scanner_orchestrator.db")
+    def test_returns_true_on_firebase_error(self, mock_db, mock_admin):
+        """
+        If Firebase fails, default to TRUE so the scanner opens
+        and waits. Better to have an idle scanner than to skip a
+        waiting passenger because of a network glitch.
+        """
+        mock_admin._apps = ["existing_app"]
+        mock_ref = MagicMock()
+        mock_ref.get.side_effect = Exception("Firebase unreachable")
+        mock_db.reference.return_value = mock_ref
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        result = orchestrator.has_pickups_here("CONAS")
+
+        assert result is True

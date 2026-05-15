@@ -101,13 +101,14 @@ class CountingLogic:
 
         conn.commit()
 
-        cursor.execute("""
-            SELECT passenger_count FROM passenger_events
-            ORDER BY event_id DESC LIMIT 1
-        """)
+        # read the LIVE passenger count from system_state, NOT from
+        # the last passenger_events row.
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='current_count'"
+        )
         result = cursor.fetchone()
         if result:
-            self.passenger_count = result[0]
+            self.passenger_count = int(result[0])
             self.available_seats = self.total_capacity - self.passenger_count
 
         cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")

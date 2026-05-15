@@ -157,6 +157,62 @@ class ScannerOrchestrator:
 
         return False
 
+    def has_pickups_here(self, stop):
+        """
+        Decide whether the scanner queue should be opened at this stop.
+
+        Narrower than should_stop_here() — this returns True ONLY
+        when there is a reserved booking with pickup_stop matching
+        the given stop. Used by run() to distinguish:
+
+          - Pickup stops          -> open the scanner queue, passengers
+                                     will scan their QR codes
+          - Alighting-only stops  -> skip the scanner queue, AI counts
+                                     the passengers leaving the shuttle
+
+        Destination matches alone do NOT trigger the scanner because
+        alighting passengers don't need to scan anything — the AI
+        counter handles them visually as they cross the doorway.
+
+        On Firebase failure, returns True conservatively so the
+        scanner opens. An idle scanner waiting for nobody costs
+        seconds; skipping a waiting passenger because of a network
+        glitch is much worse.
+
+        Args:
+            stop: The shuttle stop name being evaluated.
+
+        Returns:
+            True if at least one reserved booking has pickup_stop
+            == stop for this shuttle. False otherwise.
+        """
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(
+                f"Error querying bookings for pickup check ({stop}): {e}"
+            )
+            return True  # safe fallback
+
+        if not all_bookings:
+            return False
+
+        for _, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+            if booking.get("status") != "reserved":
+                continue
+            if booking.get("pickup_stop") != stop:
+                continue
+            return True
+
+        return False
+
     def read_current_stop(self):
         """
         Read the shuttle's current stop from SQLite system_state.
@@ -531,11 +587,21 @@ class ScannerOrchestrator:
                     continue
 
                 # phase 1: scan the queue of boarding passengers
-                scan_count = self.run_scan_queue(current_stop)
-                logger.info(
-                    f"[QUEUE COMPLETE] {scan_count} passenger(s) "
-                    f"scanned at {current_stop}"
-                )
+                # The scanner only opens at stops with pickups. At
+                # alighting-only stops, the AI handles the count
+                # visually and the scanner queue is skipped.
+                if self.has_pickups_here(current_stop):
+                    scan_count = self.run_scan_queue(current_stop)
+                    logger.info(
+                        f"[QUEUE COMPLETE] {scan_count} passenger(s) "
+                        f"scanned at {current_stop}"
+                    )
+                else:
+                    logger.info(
+                        f"[NO SCANNER] {current_stop} is an "
+                        f"alighting-only stop - passengers will be "
+                        f"counted as they leave the shuttle"
+                    )
 
                 # phase 2: launch main.py and wait for the boarding
                 # scenario to play through. subprocess.run is

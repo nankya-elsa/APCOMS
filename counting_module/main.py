@@ -22,6 +22,108 @@ from scenario_manager import ScenarioManager
 from booking_completer import BookingCompleter
 from service_day_manager import ServiceDayManager
 
+def draw_ai_visualization(frame, tracks, counting_logic, current_stop):
+    """
+    Renders the AI's view of the world onto a copy of the camera
+    frame for the panel/demo to see. Shows:
+      - Bounding boxes around every tracked person
+      - Track IDs above each box so persistence is visible
+      - The virtual counting line at the vertical midpoint
+      - Live overlay with passenger count, capacity, status, stop
+
+    Returns the annotated frame so the caller can imshow() it in a
+    dedicated visualization window separate from the OLED display.
+    """
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+    midpoint = height // 2
+
+    # virtual counting line (dashed horizontal)
+    dash_length = 20
+    for x in range(0, width, dash_length * 2):
+        cv2.line(
+            annotated,
+            (x, midpoint),
+            (x + dash_length, midpoint),
+            (0, 200, 255),  # orange-ish
+            2,
+        )
+    cv2.putText(
+        annotated,
+        "COUNTING LINE",
+        (10, midpoint - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 200, 255),
+        1,
+    )
+
+    # bounding boxes for each tracked person
+    for track in tracks:
+        x1, y1, x2, y2 = [int(v) for v in track["bbox"]]
+        track_id = track.get("track_id", "?")
+        counted = track_id in counting_logic.counted_tracks
+        color = (0, 255, 0) if counted else (0, 255, 255)  # green or yellow
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            annotated,
+            f"ID:{track_id}",
+            (x1, y1 - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
+
+    # top-left overlay: count + status
+    occupancy = counting_logic.calculate_occupancy()
+    count_text = (
+        f"PASSENGERS: {occupancy['passenger_count']} / "
+        f"{counting_logic.total_capacity}"
+    )
+    status_text = f"STATUS: {occupancy['occupancy_status']}"
+    cv2.rectangle(annotated, (10, 10), (380, 80), (0, 0, 0), -1)
+    cv2.putText(
+        annotated,
+        count_text,
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+    )
+    cv2.putText(
+        annotated,
+        status_text,
+        (20, 65),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+
+    # top-right overlay: current stop
+    stop_text = f"Stop: {current_stop}"
+    text_size = cv2.getTextSize(stop_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+    cv2.rectangle(
+        annotated,
+        (width - text_size[0] - 30, 10),
+        (width - 10, 50),
+        (0, 0, 0),
+        -1,
+    )
+    cv2.putText(
+        annotated,
+        stop_text,
+        (width - text_size[0] - 20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+
+    return annotated
+
 # configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -201,6 +303,13 @@ def main():
             cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_stop', ?)", (occupancy["current_stop"],))
             conn.commit()
             conn.close()
+
+            # show AI visualization window (camera feed + bounding boxes +
+            # track IDs + counting line + overlays).
+            ai_view = draw_ai_visualization(
+                frame, tracks, counting_logic, occupancy["current_stop"]
+            )
+            cv2.imshow("APCOMS - AI Counter", ai_view)
 
             # update OLED display
             display.show(occupancy, system_status=status["system_status"])
