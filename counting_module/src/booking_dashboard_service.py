@@ -384,6 +384,81 @@ class BookingDashboardService:
 
         return count
 
+    def list_all_bookings(self):
+        """
+        Return every booking belonging to this shuttle, sorted by
+        created_at descending so the newest booking sits at the top
+        of the table.
+
+        Used by the Live Bookings demo tab to give the panel a
+        real-time view of every reservation flowing through the
+        system. The output is not used by mobile clients, only the
+        demo dashboard.
+
+        Each entry contains:
+          booking_id            - the Firebase key (e.g. 'b1')
+          pickup_stop           - origin stop name
+          destination_stop      - destination stop name
+          status                - 'reserved' / 'active' / 'completed' / 'cancelled'
+          created_at_display    - human-readable timestamp string
+                                  ('YYYY-MM-DD HH:MM:SS') or '-' if missing
+
+        Bookings without a created_at field still appear in the
+        list, sorted to the end (sort key treated as 0).
+
+        Returns an empty list when the database is empty or
+        Firebase is unreachable. Never crashes the dashboard.
+        """
+        import datetime
+
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(f"Error listing bookings: {e}")
+            return []
+
+        if not all_bookings:
+            return []
+
+        result = []
+        for booking_id, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+
+            created_at = booking.get("created_at")
+            if created_at:
+                try:
+                    created_at_display = datetime.datetime.fromtimestamp(
+                        created_at / 1000
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                except (ValueError, OSError):
+                    created_at_display = "-"
+            else:
+                created_at_display = "-"
+
+            result.append({
+                "booking_id": booking_id,
+                "pickup_stop": booking.get("pickup_stop", "-"),
+                "destination_stop": booking.get("destination_stop", "-"),
+                "status": booking.get("status", "unknown"),
+                "created_at_display": created_at_display,
+                "_sort_key": created_at if created_at else 0,
+            })
+
+        # sort by created_at descending (newest first)
+        result.sort(key=lambda b: b["_sort_key"], reverse=True)
+
+        # strip the internal sort key before returning
+        for b in result:
+            del b["_sort_key"]
+
+        return result
+
     def get_booking_funnel(self, start_date=None, end_date=None):
         """
         Cumulative booking funnel showing lifecycle drop-off.
