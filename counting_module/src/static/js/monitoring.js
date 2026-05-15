@@ -89,7 +89,9 @@ setInterval(function () {
     .catch((err) => console.log("Refresh error:", err));
 
   // BOOKING STATS — refreshed in parallel with /api/status so the
-  // Expected Here / Boarded Here cards stay in sync with shuttle state
+  // Booking Activity cards stay in sync with shuttle state. Updates
+  // all four cards: pickups expected here, those who've boarded
+  // here, alightings expected here, and those who've alighted here.
   fetch("/api/booking_stats")
     .then((r) => r.json())
     .then((data) => {
@@ -100,6 +102,14 @@ setInterval(function () {
       if (typeof data.boarded_from_here !== "undefined") {
         document.getElementById("boarded-from-here").textContent =
           data.boarded_from_here;
+      }
+      if (typeof data.alightings_expected !== "undefined") {
+        document.getElementById("alightings-expected").textContent =
+          data.alightings_expected;
+      }
+      if (typeof data.alighted_here !== "undefined") {
+        document.getElementById("alighted-here").textContent =
+          data.alighted_here;
       }
     })
     .catch((err) => console.log("Booking stats refresh error:", err));

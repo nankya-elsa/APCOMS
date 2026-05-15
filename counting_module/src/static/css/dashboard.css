@@ -153,7 +153,7 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
    Shuttle State (4 cards) | Booking Activity (2 cards) */
 .cards-row {
   display: grid;
-  grid-template-columns: 4fr 2fr;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -181,6 +181,7 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
 .cards-grid {
   display: grid;
   gap: 12px;
+  align-items: stretch; /* force all cards in a grid to same height */
 }
 
 .cards-grid.shuttle-state {
@@ -188,7 +189,7 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
 }
 
 .cards-grid.booking-activity {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(4, 1fr);
 }
 
 /* Inner cards inside booking section keep their tinted look
@@ -205,7 +206,8 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
     grid-template-columns: 1fr;
     gap: 20px;
   }
-  .cards-grid.shuttle-state {
+  .cards-grid.shuttle-state,
+  .cards-grid.booking-activity {
     grid-template-columns: repeat(2, 1fr);
   }
 }
@@ -225,6 +227,10 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
   border: 1px solid #2a2d3a;
   border-radius: 10px;
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 130px;
 }
 
 .card-label {
@@ -233,6 +239,9 @@ html[data-active-tab="settings"] .tab-btn:nth-child(3) {
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 10px;
+  min-height: 30px;
+  display: flex;
+  align-items: flex-start;
 }
 
 .card-value {

@@ -539,6 +539,99 @@ class TestAdvanceAndSync:
         # and advance_stop must have been called too — both happen
         mock_counting.advance_stop.assert_called_once()
 
+    @patch("scanner_orchestrator.FirebaseSyncComponent")
+    @patch("scanner_orchestrator.CountingLogic")
+    @patch("scanner_orchestrator.NoShowCanceller")
+    def test_advance_and_sync_writes_arrival_timestamp(
+        self, mock_canceller_class, mock_counting_class, mock_firebase_class
+    ):
+        """
+        advance_and_sync should write the current Unix-ms timestamp
+        to system_state as 'current_stop_arrived_at_ms'. This is the
+        moment the shuttle is conceptually pulling up at the new
+        stop, and downstream queries use this timestamp to count
+        ONLY bookings completed during this visit (not previous
+        visits earlier in the day).
+        """
+        mock_counting = MagicMock()
+        mock_counting.get_current_stop.return_value = "Main Library"
+        mock_counting.current_stop_index = 3
+        mock_counting.designated_stops_list = [
+            "Western Gate", "CEDAT", "CONAS", "Main Library",
+            "Africa Hall", "Swimming Pool", "Mitchell Hall",
+            "COCIS", "Complex Hall", "CEES", "Lumumba Hall",
+        ]
+        mock_counting_class.return_value = mock_counting
+
+        mock_canceller = MagicMock()
+        mock_canceller.cancel_no_shows.return_value = 0
+        mock_canceller_class.return_value = mock_canceller
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        orchestrator.advance_and_sync()
+
+        # verify a timestamp was written to system_state
+        conn = sqlite3.connect(TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='current_stop_arrived_at_ms'"
+        )
+        row = cursor.fetchone()
+        conn.close()
+        assert row is not None
+        # should parse as an integer and be a reasonable Unix-ms value
+        timestamp = int(row[0])
+        # must be a recent timestamp (positive, post-2024 in ms)
+        assert timestamp > 1700000000000
+        # and not crazy-far in the future
+        assert timestamp < 2000000000000
+
+    @patch("scanner_orchestrator.FirebaseSyncComponent")
+    @patch("scanner_orchestrator.CountingLogic")
+    @patch("scanner_orchestrator.NoShowCanceller")
+    def test_advance_and_sync_writes_arrival_date(
+        self, mock_canceller_class, mock_counting_class, mock_firebase_class
+    ):
+        """
+        advance_and_sync should also write the current calendar date
+        as 'current_stop_arrived_date' in YYYY-MM-DD format. This
+        date is the safety net for the timestamp comparison: if for
+        any reason the timestamp doesn't get updated (e.g. shuttle
+        restarted mid-day), the date filter still prevents stale
+        data from yesterday from contaminating today's counts.
+        """
+        import datetime
+
+        mock_counting = MagicMock()
+        mock_counting.get_current_stop.return_value = "Main Library"
+        mock_counting.current_stop_index = 3
+        mock_counting.designated_stops_list = [
+            "Western Gate", "CEDAT", "CONAS", "Main Library",
+            "Africa Hall", "Swimming Pool", "Mitchell Hall",
+            "COCIS", "Complex Hall", "CEES", "Lumumba Hall",
+        ]
+        mock_counting_class.return_value = mock_counting
+
+        mock_canceller = MagicMock()
+        mock_canceller.cancel_no_shows.return_value = 0
+        mock_canceller_class.return_value = mock_canceller
+
+        orchestrator = ScannerOrchestrator(db_path=TEST_DB)
+        orchestrator.advance_and_sync()
+
+        # verify date was written as YYYY-MM-DD
+        conn = sqlite3.connect(TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='current_stop_arrived_date'"
+        )
+        row = cursor.fetchone()
+        conn.close()
+        assert row is not None
+        # must be today's date in YYYY-MM-DD format
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        assert row[0] == today
+
 
 class TestRunMainLoop:
     """

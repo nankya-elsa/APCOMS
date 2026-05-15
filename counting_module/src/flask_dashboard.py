@@ -837,12 +837,23 @@ class FlaskDashboard:
         @app.route("/api/booking_stats")
         def api_booking_stats():
             """
-            Live booking statistics for the Monitoring tab cards:
+            Live booking statistics for the Monitoring tab cards.
+            Returns four booking-activity counts for the shuttle's
+            current stop:
+
               - pickups_expected: count of reserved bookings at
                 the current stop (passengers about to scan)
               - boarded_from_here: count of active bookings with
                 pickup_stop matching the current stop (passengers
-                who have already scanned)
+                who have already scanned and boarded)
+              - alightings_expected: count of active bookings with
+                destination_stop matching the current stop
+                (passengers currently onboard expecting to alight)
+              - alighted_here: count of completed bookings with
+                destination_stop matching the current stop,
+                completed during this visit (passengers who have
+                actually disembarked at this stop on the current
+                shuttle arrival)
 
             Current stop is read from SQLite system_state where
             it is kept in sync by main.py and the orchestrator.
@@ -875,6 +886,8 @@ class FlaskDashboard:
                 "current_stop": current_stop,
                 "pickups_expected": service.get_pickups_expected(current_stop),
                 "boarded_from_here": service.get_boarded_from_stop(current_stop),
+                "alightings_expected": service.get_alightings_expected(current_stop),
+                "alighted_here": service.get_alighted_at_stop(current_stop),
             })
 
         @app.route("/api/booking_analytics")

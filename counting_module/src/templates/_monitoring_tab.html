@@ -52,7 +52,16 @@ Live shuttle state with auto-refresh every 5 seconds:
 
         <div class="card">
           <div class="card-label">Current Stop</div>
-          <div class="card-value" style="font-size: 18px" id="current-stop">
+          <div
+            class="card-value"
+            style="
+              font-size: 16px;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            "
+            id="current-stop"
+          >
             {{ data.occupancy.current_stop }}
           </div>
           <div class="card-sub">Shuttle location</div>
@@ -65,9 +74,9 @@ Live shuttle state with auto-refresh every 5 seconds:
       <div class="cards-section-label">Booking Activity</div>
       <div class="cards-grid booking-activity">
         <div class="card">
-          <div class="card-label">Expected Here</div>
+          <div class="card-label">Pickups Expected</div>
           <div class="card-value blue" id="pickups-expected">0</div>
-          <div class="card-sub">Reserved pickups</div>
+          <div class="card-sub">Reserved at this stop</div>
         </div>
 
         <div class="card">
@@ -75,9 +84,22 @@ Live shuttle state with auto-refresh every 5 seconds:
           <div class="card-value green" id="boarded-from-here">0</div>
           <div class="card-sub">Scanned at this stop</div>
         </div>
+
+        <div class="card">
+          <div class="card-label">Alightings Expected</div>
+          <div class="card-value blue" id="alightings-expected">0</div>
+          <div class="card-sub">Onboard for this stop</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Alighted Here</div>
+          <div class="card-value green" id="alighted-here">0</div>
+          <div class="card-sub">Dropped off this visit</div>
+        </div>
       </div>
     </div>
   </div>
+  <!-- END cards-row -->
 
   <!-- SYSTEM STATUS + LOGS -->
   <div class="two-col">
