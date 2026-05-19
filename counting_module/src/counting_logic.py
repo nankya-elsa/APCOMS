@@ -109,7 +109,16 @@ class CountingLogic:
         result = cursor.fetchone()
         if result:
             self.passenger_count = int(result[0])
-            self.available_seats = self.total_capacity - self.passenger_count
+
+        # read available_seats from system_state — stored field, not derived
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='available_seats'"
+        )
+        seats_result = cursor.fetchone()
+        if seats_result:
+            self.available_seats = int(seats_result[0])
+        # If no entry exists (fresh deployment), available_seats keeps
+        # its default value of total_capacity set in __init__.
 
         cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
         stop_result = cursor.fetchone()
@@ -176,7 +185,6 @@ class CountingLogic:
         if direction == "boarding":
             if self.passenger_count < self.total_capacity:
                 self.passenger_count += 1
-                self.available_seats -= 1
                 self.counted_tracks.append(track["track_id"])
                 logger.info(f"Boarding event - passenger count: {self.passenger_count}")
             else:

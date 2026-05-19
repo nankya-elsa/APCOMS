@@ -764,3 +764,194 @@ class TestGhostAlightingAlert:
 
         assert counting.passenger_count == 0
         assert "ghost_no_logger" in counting.counted_tracks
+
+
+class TestBookingHoldsSeats:
+    """
+    Tests covering the new soft-hold reservation model where
+    available_seats is an independently stored field that is
+    decremented at booking time (not at scan time) and incremented
+    on cancellation, no-show, or alighting.
+
+    The key insight: available_seats and passenger_count are now
+    independent. A shuttle can have 2 people onboard but only 5
+    available_seats if 13 people have active bookings — those
+    bookings are holding seats that haven't been physically
+    occupied yet.
+
+    Previously, available_seats was computed as:
+        available_seats = total_capacity - passenger_count
+
+    Now it is a stored field maintained explicitly on every
+    event that affects it:
+        Book        -> available_seats -= 1
+        Cancel      -> available_seats += 1
+        No-show     -> available_seats += 1
+        Board (scan)-> no change to available_seats
+        Alight      -> available_seats += 1
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        """Clean test database state before each test."""
+        import sqlite3
+        import os
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        cursor.execute("DROP TABLE IF EXISTS passenger_events")
+        conn.commit()
+        conn.close()
+
+    def _boarding_track(self, track_id):
+        return {
+            "track_id": track_id,
+            "previous_centroid": [400, 200],
+            "current_centroid": [400, 800],
+        }
+
+    def _alighting_track(self, track_id):
+        return {
+            "track_id": track_id,
+            "previous_centroid": [400, 800],
+            "current_centroid": [400, 200],
+        }
+
+    def test_boarding_increments_passenger_count_only(self):
+        """
+        Test that boarding (a scan event) increments passenger_count
+        by 1 but does NOT touch available_seats. In the soft-hold
+        model the seat was already held when the booking was
+        created — scanning just confirms the passenger physically
+        boarded so only the onboard count changes.
+        """
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        counter.initialize()
+        counter.available_seats = 15  # simulating 5 active bookings holding seats
+        initial_count = counter.passenger_count
+
+        counter.update_count(self._boarding_track(1))
+
+        assert counter.passenger_count == initial_count + 1
+        assert counter.available_seats == 15  # unchanged
+
+    def test_alighting_decrements_count_and_increments_seats(self):
+        """
+        Test that alighting decrements passenger_count AND increments
+        available_seats. When a passenger leaves the shuttle their
+        seat genuinely returns to the pool — they completed their
+        trip so the booking lifecycle ends and the seat is free for
+        someone else to book.
+        """
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        counter.initialize()
+        counter.passenger_count = 5
+        counter.available_seats = 10
+
+        counter.update_count(self._alighting_track(1))
+
+        assert counter.passenger_count == 4
+        assert counter.available_seats == 11
+
+    def test_available_seats_read_from_sqlite_on_initialize(self):
+        """
+        Test that initialize() reads available_seats from system_state
+        instead of computing it from total_capacity - passenger_count.
+        This is the core of the soft-hold model — available_seats
+        is a stored value maintained on every booking/cancel/board/
+        alight event, not a derived value.
+        """
+        import sqlite3
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_count', '2')"
+        )
+        cursor.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES ('available_seats', '5')"
+        )
+        conn.commit()
+        conn.close()
+
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        counter.initialize()
+
+        # Old behaviour would compute available_seats as 20 - 2 = 18.
+        # New behaviour reads the stored 5 (because 13 active
+        # bookings are holding seats).
+        assert counter.passenger_count == 2
+        assert counter.available_seats == 5
+
+    def test_available_seats_defaults_to_capacity_when_not_in_sqlite(self):
+        """
+        Test that available_seats defaults to total_capacity on fresh
+        deployment when system_state has no available_seats entry.
+        This ensures the system works correctly on first ever run
+        before any bookings, scans, or service-day resets have set
+        the stored value.
+        """
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        counter.initialize()
+
+        assert counter.available_seats == 20
+
+    def test_available_seats_independent_of_passenger_count(self):
+        """
+        Test that available_seats can be less than total_capacity
+        minus passenger_count when bookings are holding seats. This
+        is the entire point of the soft-hold model — a shuttle can
+        have 2 people physically onboard but only 5 free seats
+        because 13 active bookings are reserving the rest.
+        """
+        import sqlite3
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_count', '2')"
+        )
+        cursor.execute(
+            "INSERT OR REPLACE INTO system_state (key, value) VALUES ('available_seats', '5')"
+        )
+        conn.commit()
+        conn.close()
+
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        counter.initialize()
+
+        # 2 onboard, 5 free, 13 reserved by bookings — total_capacity
+        # is 20 but available_seats is NOT 20 - 2 = 18.
+        assert counter.available_seats != counter.total_capacity - counter.passenger_count
+        assert counter.available_seats == 5
+        assert counter.passenger_count == 2
+
+    def test_reset_count_resets_available_seats_to_capacity(self):
+        """
+        Test that reset_count() restores available_seats back to
+        total_capacity. Even in the soft-hold model a manual reset
+        means "empty the shuttle and clear all holds" — operators
+        only invoke this in emergencies (e.g. wrong count detected
+        mid-route) so blowing away the holds is intended.
+        """
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        counter.initialize()
+        counter.passenger_count = 8
+        counter.available_seats = 3
+
+        counter.reset_count()
+
+        assert counter.passenger_count == 0
+        assert counter.available_seats == 20
