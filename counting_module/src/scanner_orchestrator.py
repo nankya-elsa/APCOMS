@@ -35,6 +35,8 @@ from counting_logic import CountingLogic
 from firebase_sync import FirebaseSyncComponent
 from no_show_canceller import NoShowCanceller
 from service_day_manager import ServiceDayManager
+from seat_pool_manager import SeatPoolManager
+from booking_firebase_listener import BookingFirebaseListener
 
 logger = logging.getLogger(__name__)
 
@@ -411,12 +413,30 @@ class ScannerOrchestrator:
         # capture the stop being LEFT before we advance — we need
         # it to find no-show bookings at this pickup stop
         stop_being_left = counting.get_current_stop()
+
+        # one FirebaseSync shared between the no-show canceller's
+        # seat-pool releases and the final advance-state push at
+        # the end of this method.
+        firebase = FirebaseSyncComponent(shuttle_id=self.shuttle_id)
+        firebase.initialize()
+
+        # SeatPoolManager wired with the shared sync so every seat
+        # release (no-show or otherwise) propagates to Firebase
+        # the moment it happens.
+        seat_pool = SeatPoolManager(
+            total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+            db_path=self.db_path,
+            firebase_sync=firebase,
+        )
+
         # cancel any reserved bookings whose passengers didn't scan
         # at this stop. Drains the retry queue too, so accumulated
         # cancellations from previous Firebase outages also get
         # applied this cycle.
         canceller = NoShowCanceller(
-            shuttle_id=self.shuttle_id, db_path=self.db_path
+            shuttle_id=self.shuttle_id,
+            db_path=self.db_path,
+            seat_pool_manager=seat_pool,
         )
         cancelled_count = canceller.cancel_no_shows(stop=stop_being_left)
         if cancelled_count > 0:
@@ -425,9 +445,6 @@ class ScannerOrchestrator:
                 f"at {stop_being_left}"
             )
         counting.advance_stop()
-
-        firebase = FirebaseSyncComponent(shuttle_id=self.shuttle_id)
-        firebase.initialize()
 
         current_stop = counting.get_current_stop()
         next_index = (counting.current_stop_index + 1) % len(
@@ -531,6 +548,56 @@ class ScannerOrchestrator:
             "occupancy_status": status,
         }
 
+    def _start_booking_listener(self):
+        """
+        Attach the BookingFirebaseListener to Firebase /bookings.
+
+        Builds a SeatPoolManager + BookingFirebaseListener and
+        registers a stream handler that fires our listener's
+        on_booking_event for every booking change. The listener
+        runs in the background for the lifetime of this orchestrator.
+        """
+        self._ensure_firebase()
+
+        firebase_sync_for_listener = FirebaseSyncComponent(
+            shuttle_id=self.shuttle_id
+        )
+        firebase_sync_for_listener.initialize()
+        seat_pool = SeatPoolManager(
+            total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+            db_path=self.db_path,
+            firebase_sync=firebase_sync_for_listener,
+        )
+        listener = BookingFirebaseListener(
+            shuttle_id=self.shuttle_id,
+            db_path=self.db_path,
+            seat_pool_manager=seat_pool,
+        )
+
+        def _handler(event):
+            # Firebase stream events have a path like '/bookingId'
+            # or '/' (for the full snapshot on initial load).
+            path = (event.path or "").lstrip("/")
+            data = event.data
+
+            if not path:
+                # initial full snapshot — iterate every booking
+                if isinstance(data, dict):
+                    for booking_id, booking_data in data.items():
+                        listener.on_booking_event(booking_id, booking_data)
+                return
+
+            # single booking changed — fire for just that id
+            booking_id = path.split("/")[0]
+            if isinstance(data, dict):
+                listener.on_booking_event(booking_id, data)
+
+        try:
+            db.reference("bookings").listen(_handler)
+            logger.info("BookingFirebaseListener attached to /bookings")
+        except Exception as e:
+            logger.error(f"Failed to attach booking listener: {e}")
+
     def run(self):
         """
         Run the full orchestrator loop until the operator quits.
@@ -563,6 +630,12 @@ class ScannerOrchestrator:
         reset_date = service_day_manager.reset_if_needed()
         if reset_date:
             logger.info(f"Service-day reset performed for {reset_date}")
+
+        # Start the booking listener so book / user-cancel events from
+        # Cissy's app flow into the seat pool while the shuttle runs.
+        # The listener attaches to Firebase /bookings and stays live
+        # for the duration of the orchestrator loop.
+        self._start_booking_listener()
 
         try:
             while True:

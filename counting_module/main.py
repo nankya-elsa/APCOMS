@@ -21,6 +21,7 @@ from system_monitor import SystemMonitor
 from scenario_manager import ScenarioManager
 from booking_completer import BookingCompleter
 from service_day_manager import ServiceDayManager
+from seat_pool_manager import SeatPoolManager
 
 def draw_ai_visualization(frame, tracks, counting_logic, current_stop):
     """
@@ -161,8 +162,25 @@ def main():
     system_monitor = SystemMonitor(data_logger=data_logger)
     system_monitor.initialize()
 
+    # Firebase Sync — constructed early so SeatPoolManager can use it
+    firebase_sync = FirebaseSyncComponent(
+        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
+    )
+    firebase_sync.initialize()
+
+    # Seat Pool Manager — owns available_seats, syncs every mutation
+    # to Firebase. CountingLogic delegates alighting seat releases here.
+    seat_pool_manager = SeatPoolManager(
+        total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+        db_path="local_database/apcoms.db",
+        firebase_sync=firebase_sync,
+    )
+
     # Counting Logic
-    counting_logic = CountingLogic(data_logger=data_logger)
+    counting_logic = CountingLogic(
+        data_logger=data_logger,
+        seat_pool_manager=seat_pool_manager,
+    )
     counting_logic.initialize()
 
     # Scenario Manager - decides which video to play this run
@@ -194,12 +212,6 @@ def main():
     # Display Component
     display = DisplayComponent()
     display.initialize_display()
-
-    # Firebase Sync
-    firebase_sync = FirebaseSyncComponent(
-        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
-    )
-    firebase_sync.initialize()
 
     # Booking Completer — marks bookings as 'completed' on alighting
     booking_completer = BookingCompleter()
