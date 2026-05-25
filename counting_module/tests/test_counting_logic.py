@@ -837,15 +837,22 @@ class TestBookingHoldsSeats:
         assert counter.passenger_count == initial_count + 1
         assert counter.available_seats == 15  # unchanged
 
-    def test_alighting_decrements_count_and_increments_seats(self):
+    def test_alighting_decrements_count_and_delegates_seat_release(self):
         """
-        Test that alighting decrements passenger_count AND increments
-        available_seats. When a passenger leaves the shuttle their
-        seat genuinely returns to the pool — they completed their
-        trip so the booking lifecycle ends and the seat is free for
-        someone else to book.
+        Test that alighting decrements passenger_count and delegates
+        the seat release to seat_pool_manager. The manager handles
+        the SQLite write and Firebase sync; CountingLogic just needs
+        to refresh its in-memory cache afterwards so reads of
+        counter.available_seats stay fresh.
         """
-        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        mock_manager.get_current.return_value = 11
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
         counter.initialize()
         counter.passenger_count = 5
         counter.available_seats = 10
@@ -853,6 +860,7 @@ class TestBookingHoldsSeats:
         counter.update_count(self._alighting_track(1))
 
         assert counter.passenger_count == 4
+        mock_manager.increment.assert_called_once_with(reason="alight")
         assert counter.available_seats == 11
 
     def test_available_seats_read_from_sqlite_on_initialize(self):
@@ -955,3 +963,387 @@ class TestBookingHoldsSeats:
 
         assert counter.passenger_count == 0
         assert counter.available_seats == 20
+
+
+class TestAlightingReleasesSeatViaPoolManager:
+    """
+    Tests covering the alighting flow delegating its seat release
+    to SeatPoolManager rather than mutating self.available_seats
+    inline.
+
+    The manager owns the available_seats field — it writes to
+    SQLite, syncs to Firebase, and caps at total_capacity. After
+    delegation, CountingLogic refreshes self.available_seats from
+    the manager so callers reading counter.available_seats see the
+    fresh value.
+
+    When seat_pool_manager is None, the alighting flow simply
+    skips the seat release. There is no inline fallback — this
+    is by design, single path, no drift risk.
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        import sqlite3
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        cursor.execute("DROP TABLE IF EXISTS passenger_events")
+        conn.commit()
+        conn.close()
+
+    def _alighting_track(self, track_id):
+        return {
+            "track_id": track_id,
+            "previous_centroid": [400, 800],
+            "current_centroid": [400, 200],
+        }
+
+    def test_alighting_calls_increment_with_alight_reason(self):
+        """
+        Every successful alighting must invoke
+        seat_pool_manager.increment with reason='alight' so the
+        audit log carries the cause of the seat release.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        mock_manager.get_current.return_value = 11
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 5
+
+        counter.update_count(self._alighting_track(1))
+
+        mock_manager.increment.assert_called_once_with(reason="alight")
+
+    def test_alighting_refreshes_in_memory_available_seats(self):
+        """
+        After delegating to the manager, counter.available_seats
+        must reflect the manager's new value so dashboards and
+        UI components reading the attribute see fresh data without
+        having to re-query SQLite themselves.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        mock_manager.get_current.return_value = 8
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 5
+        counter.available_seats = 7  # stale
+
+        counter.update_count(self._alighting_track(1))
+
+        assert counter.available_seats == 8
+
+    def test_ghost_alighting_does_not_release_seat(self):
+        """
+        Ghost alighting (alighting detected with count already at
+        zero) is an AI false positive. The seat pool must NOT be
+        incremented because no real passenger left the shuttle.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 0
+
+        counter.update_count(self._alighting_track(1))
+
+        mock_manager.increment.assert_not_called()
+
+    def test_boarding_does_not_call_seat_pool_manager(self):
+        """
+        Boarding only confirms physical presence on the shuttle —
+        the seat was already held at booking time. The manager
+        must not be touched on boarding events.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 0
+
+        boarding_track = {
+            "track_id": 1,
+            "previous_centroid": [400, 200],
+            "current_centroid": [400, 800],
+        }
+        counter.update_count(boarding_track)
+
+        mock_manager.increment.assert_not_called()
+        mock_manager.decrement.assert_not_called()
+
+    def test_alighting_without_manager_skips_seat_release(self):
+        """
+        When seat_pool_manager is None, the alighting flow still
+        decrements passenger_count but takes no action on the seat
+        pool. No inline fallback — single path, by design. The
+        seat release is simply omitted, and a real production
+        wiring is expected to always provide the manager.
+        """
+        counter = CountingLogic(
+            total_capacity=20, db_path=self.TEST_DB, seat_pool_manager=None
+        )
+        counter.initialize()
+        counter.passenger_count = 5
+        counter.available_seats = 7
+
+        counter.update_count(self._alighting_track(1))
+
+        # passenger_count still decrements -- that's the core
+        # counting responsibility CountingLogic still owns.
+        assert counter.passenger_count == 4
+        # available_seats is unchanged because no manager mutated it
+        assert counter.available_seats == 7
+
+
+class TestCountingLogicSeatPoolConstructor:
+    """
+    Tests covering the optional seat_pool_manager constructor
+    parameter on CountingLogic.
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        import sqlite3
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        conn.commit()
+        conn.close()
+
+    def test_counter_accepts_seat_pool_manager(self):
+        """
+        Constructor accepts an optional seat_pool_manager so
+        production code can wire in a real SeatPoolManager
+        instance while isolated tests pass mocks.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        assert counter.seat_pool_manager is mock_manager
+
+    def test_seat_pool_manager_defaults_to_none(self):
+        """
+        Without an explicit override, seat_pool_manager defaults
+        to None so legacy callers and tests that don't care about
+        seat releases continue to work unchanged.
+        """
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        assert counter.seat_pool_manager is None
+
+
+class TestAlightingReleasesSeatViaPoolManager:
+    """
+    Tests covering the alighting flow delegating its seat release
+    to SeatPoolManager rather than mutating self.available_seats
+    inline.
+
+    The manager owns the available_seats field — it writes to
+    SQLite, syncs to Firebase, and caps at total_capacity. After
+    delegation, CountingLogic refreshes self.available_seats from
+    the manager so callers reading counter.available_seats see the
+    fresh value.
+
+    When seat_pool_manager is None, the alighting flow simply
+    skips the seat release. There is no inline fallback — this
+    is by design, single path, no drift risk.
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        import sqlite3
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        cursor.execute("DROP TABLE IF EXISTS passenger_events")
+        conn.commit()
+        conn.close()
+
+    def _alighting_track(self, track_id):
+        return {
+            "track_id": track_id,
+            "previous_centroid": [400, 800],
+            "current_centroid": [400, 200],
+        }
+
+    def test_alighting_calls_increment_with_alight_reason(self):
+        """
+        Every successful alighting must invoke
+        seat_pool_manager.increment with reason='alight' so the
+        audit log carries the cause of the seat release.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        mock_manager.get_current.return_value = 11
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 5
+
+        counter.update_count(self._alighting_track(1))
+
+        mock_manager.increment.assert_called_once_with(reason="alight")
+
+    def test_alighting_refreshes_in_memory_available_seats(self):
+        """
+        After delegating to the manager, counter.available_seats
+        must reflect the manager's new value so dashboards and
+        UI components reading the attribute see fresh data without
+        having to re-query SQLite themselves.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        mock_manager.get_current.return_value = 8
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 5
+        counter.available_seats = 7  # stale
+
+        counter.update_count(self._alighting_track(1))
+
+        assert counter.available_seats == 8
+
+    def test_ghost_alighting_does_not_release_seat(self):
+        """
+        Ghost alighting (alighting detected with count already at
+        zero) is an AI false positive. The seat pool must NOT be
+        incremented because no real passenger left the shuttle.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 0
+
+        counter.update_count(self._alighting_track(1))
+
+        mock_manager.increment.assert_not_called()
+
+    def test_boarding_does_not_call_seat_pool_manager(self):
+        """
+        Boarding only confirms physical presence on the shuttle —
+        the seat was already held at booking time. The manager
+        must not be touched on boarding events.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        counter.initialize()
+        counter.passenger_count = 0
+
+        boarding_track = {
+            "track_id": 1,
+            "previous_centroid": [400, 200],
+            "current_centroid": [400, 800],
+        }
+        counter.update_count(boarding_track)
+
+        mock_manager.increment.assert_not_called()
+        mock_manager.decrement.assert_not_called()
+
+    def test_alighting_without_manager_skips_seat_release(self):
+        """
+        When seat_pool_manager is None, the alighting flow still
+        decrements passenger_count but takes no action on the seat
+        pool. No inline fallback — single path, by design. The
+        seat release is simply omitted, and a real production
+        wiring is expected to always provide the manager.
+        """
+        counter = CountingLogic(
+            total_capacity=20, db_path=self.TEST_DB, seat_pool_manager=None
+        )
+        counter.initialize()
+        counter.passenger_count = 5
+        counter.available_seats = 7
+
+        counter.update_count(self._alighting_track(1))
+
+        # passenger_count still decrements -- that's the core
+        # counting responsibility CountingLogic still owns.
+        assert counter.passenger_count == 4
+        # available_seats is unchanged because no manager mutated it
+        assert counter.available_seats == 7
+
+
+class TestCountingLogicSeatPoolConstructor:
+    """
+    Tests covering the optional seat_pool_manager constructor
+    parameter on CountingLogic.
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        import sqlite3
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        conn.commit()
+        conn.close()
+
+    def test_counter_accepts_seat_pool_manager(self):
+        """
+        Constructor accepts an optional seat_pool_manager so
+        production code can wire in a real SeatPoolManager
+        instance while isolated tests pass mocks.
+        """
+        from unittest.mock import MagicMock
+        mock_manager = MagicMock()
+        counter = CountingLogic(
+            total_capacity=20,
+            db_path=self.TEST_DB,
+            seat_pool_manager=mock_manager,
+        )
+        assert counter.seat_pool_manager is mock_manager
+
+    def test_seat_pool_manager_defaults_to_none(self):
+        """
+        Without an explicit override, seat_pool_manager defaults
+        to None so legacy callers and tests that don't care about
+        seat releases continue to work unchanged.
+        """
+        counter = CountingLogic(total_capacity=20, db_path=self.TEST_DB)
+        assert counter.seat_pool_manager is None

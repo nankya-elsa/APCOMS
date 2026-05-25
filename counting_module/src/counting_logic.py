@@ -7,13 +7,14 @@ logger = logging.getLogger(__name__)
 
 class CountingLogic:
 
-    def __init__(self, total_capacity=None, db_path=None, data_logger=None):
+    def __init__(self, total_capacity=None, db_path=None, data_logger=None, seat_pool_manager=None):
         import json
 
         self.db_path = db_path or "local_database/apcoms.db"
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
         self.data_logger = data_logger
+        self.seat_pool_manager = seat_pool_manager
         self.counted_tracks = []
         self.current_stop_index = 0
         self.passenger_count = 0
@@ -210,8 +211,13 @@ class CountingLogic:
         elif direction == "alighting":
             if self.passenger_count > 0:
                 self.passenger_count -= 1
-                self.available_seats += 1
                 self.counted_tracks.append(track["track_id"])
+                # delegate seat release to the manager -- single source
+                # of truth for available_seats. refresh in-memory cache
+                # afterwards so reads of counter.available_seats stay fresh.
+                if self.seat_pool_manager is not None:
+                    self.seat_pool_manager.increment(reason="alight")
+                    self.available_seats = self.seat_pool_manager.get_current()
                 logger.info(f"Alighting event - passenger count: {self.passenger_count}")
             else:
                 # GHOST ALIGHTING: AI sees someone exit but count is
