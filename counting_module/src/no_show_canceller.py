@@ -59,7 +59,7 @@ class NoShowCanceller:
                     this to avoid polluting production state.
     """
 
-    def __init__(self, shuttle_id=None, db_path=None):
+    def __init__(self, shuttle_id=None, db_path=None, seat_pool_manager=None):
         """
         Initialize the NoShowCanceller.
 
@@ -69,11 +69,15 @@ class NoShowCanceller:
                         variable or 'shuttle_001' if unset.
             db_path:    Optional override for the SQLite database
                         path. Defaults to 'local_database/apcoms.db'.
+            seat_pool_manager: Optional SeatPoolManager instance. When
+                               present, every successful cancellation
+                               releases the held seat back to the pool.
         """
         self.shuttle_id = shuttle_id or os.getenv(
             "SHUTTLE_ID", "shuttle_001"
         )
         self.db_path = db_path or "local_database/apcoms.db"
+        self.seat_pool_manager = seat_pool_manager
         self._firebase_ready = False
 
     def _ensure_firebase(self):
@@ -213,12 +217,25 @@ class NoShowCanceller:
             logger.info(
                 f"Booking {booking_id} cancelled (no_show_at_pickup)"
             )
-            return True
         except Exception as e:
             logger.error(
                 f"Error cancelling booking {booking_id}: {e}"
             )
             return False
+
+        # Firebase accepted the cancellation -- release the held seat
+        # back to the pool. Seat-release failures are logged but don't
+        # undo the cancellation; next reconciliation cycle will catch
+        # any drift.
+        if self.seat_pool_manager is not None:
+            try:
+                self.seat_pool_manager.increment(reason="no_show")
+            except Exception as e:
+                logger.error(
+                    f"Seat release failed after cancelling {booking_id}: {e}"
+                )
+
+        return True
 
     def _init_queue_table(self):
         """
