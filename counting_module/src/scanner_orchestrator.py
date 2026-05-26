@@ -626,7 +626,17 @@ class ScannerOrchestrator:
         logger.info("Press Ctrl+C at the prompt to exit")
         logger.info("=" * 60)
 
-        service_day_manager = ServiceDayManager(db_path=self.db_path)
+        # firebase_sync wired in so the service-day reset propagates
+        # to Firebase, keeping the cloud baseline consistent with
+        # the local SQLite reset.
+        service_day_firebase = FirebaseSyncComponent(
+            shuttle_id=self.shuttle_id
+        )
+        service_day_firebase.initialize()
+        service_day_manager = ServiceDayManager(
+            db_path=self.db_path,
+            firebase_sync=service_day_firebase,
+        )
         reset_date = service_day_manager.reset_if_needed()
         if reset_date:
             logger.info(f"Service-day reset performed for {reset_date}")

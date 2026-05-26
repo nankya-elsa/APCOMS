@@ -63,17 +63,21 @@ class ServiceDayManager:
                  during reset. Defaults to the production path.
     """
 
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, firebase_sync=None):
         """
         Initialize the ServiceDayManager.
 
         Args:
-            db_path: Optional override for the SQLite path. When
-                     omitted, defaults to the production path
-                     'local_database/apcoms.db' so callers that
-                     just want default behaviour need no setup.
+            db_path:       Optional override for the SQLite path.
+                           Defaults to 'local_database/apcoms.db'.
+            firebase_sync: Optional FirebaseSyncComponent. When
+                           provided, perform_reset pushes the fresh
+                           baseline to Firebase too, keeping the
+                           cloud state consistent with the local
+                           reset. When None, only SQLite is reset.
         """
         self.db_path = db_path or "local_database/apcoms.db"
+        self.firebase_sync = firebase_sync
 
     def should_reset(self):
         """
@@ -243,6 +247,48 @@ class ServiceDayManager:
             )
         except sqlite3.Error as e:
             logger.error(f"Error performing reset: {e}")
+            return
+
+        # push the fresh baseline to Firebase so the dashboard and
+        # mobile app see the reset immediately. firebase_sync is
+        # optional -- if missing, we skip cloud sync rather than
+        # crashing. Failures are logged but never block the local
+        # reset (offline-first principle).
+        if self.firebase_sync is None:
+            return
+
+        try:
+            # compute next_stop with wraparound
+            stops_list = []
+            try:
+                import json as _json
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT value FROM system_state WHERE key='designated_stops'"
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row and row[0]:
+                    stops_list = _json.loads(row[0])
+            except (sqlite3.Error, ValueError):
+                stops_list = []
+
+            next_stop = stops_list[1] if len(stops_list) > 1 else first_stop
+
+            payload = {
+                "passenger_count": 0,
+                "available_seats": int(total_capacity),
+                "occupancy_status": "Available",
+                "current_stop": first_stop,
+                "next_stop": next_stop,
+            }
+            self.firebase_sync.sync_to_firebase(payload)
+            logger.info(
+                f"Service-day reset pushed to Firebase ({target_date})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to push reset to Firebase: {e}")
 
     def reset_if_needed(self):
         """

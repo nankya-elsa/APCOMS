@@ -146,7 +146,13 @@ def main():
     # Resets live shuttle state to fresh-day baseline if a new
     # service day has begun since the last reset. Safe to call —
     # only performs work if a reset is actually due today.
-    service_day_manager = ServiceDayManager()
+    service_day_firebase = FirebaseSyncComponent(
+        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
+    )
+    service_day_firebase.initialize()
+    service_day_manager = ServiceDayManager(
+        firebase_sync=service_day_firebase
+    )
     reset_date = service_day_manager.reset_if_needed()
     if reset_date:
         logger.info(f"Service-day reset performed for {reset_date}")

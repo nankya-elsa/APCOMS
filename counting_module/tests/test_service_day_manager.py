@@ -627,3 +627,176 @@ class TestResetIfNeeded:
         assert result == "2026-05-13"
         assert _read_state(TEST_DB, "last_reset_date") == "2026-05-13"
         assert _read_state(TEST_DB, "current_count") == "0"
+
+
+class TestPerformResetSyncsFirebase:
+    """
+    Tests covering the new Firebase sync behaviour in perform_reset.
+
+    Without this sync, SQLite resets cleanly each morning but
+    Firebase keeps stale state forever -- the dashboard and mobile
+    app see yesterday's last available_seats / current_count until
+    the next time main.py or the orchestrator pushes an update.
+    By syncing on every reset, the whole system stays consistent.
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        cursor.execute("""
+            CREATE TABLE system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO system_state (key, value)
+            VALUES ('total_capacity', '20')
+        """)
+        import json
+        cursor.execute("""
+            INSERT INTO system_state (key, value)
+            VALUES ('designated_stops', ?)
+        """, (json.dumps(["Western Gate", "CEDAT", "CONAS", "Main Library"]),))
+        conn.commit()
+        conn.close()
+
+    def test_constructor_accepts_optional_firebase_sync(self):
+        """
+        The manager should accept an optional firebase_sync so
+        callers can opt-in to the sync without forcing every
+        legacy caller to update at once.
+        """
+        from unittest.mock import MagicMock
+        mock_sync = MagicMock()
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, firebase_sync=mock_sync
+        )
+        assert manager.firebase_sync is mock_sync
+
+    def test_firebase_sync_defaults_to_none(self):
+        """
+        Without an explicit firebase_sync, the attribute defaults
+        to None so legacy callers continue working as before.
+        """
+        manager = ServiceDayManager(db_path=self.TEST_DB)
+        assert manager.firebase_sync is None
+
+    def test_perform_reset_calls_firebase_sync_when_provided(self):
+        """
+        After clearing SQLite, perform_reset should push the new
+        fresh-day state to Firebase so the dashboard and app see
+        the reset immediately rather than days later.
+        """
+        from unittest.mock import MagicMock
+        mock_sync = MagicMock()
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, firebase_sync=mock_sync
+        )
+
+        manager.perform_reset("2026-05-26")
+
+        mock_sync.sync_to_firebase.assert_called_once()
+
+    def test_perform_reset_payload_contains_fresh_day_baseline(self):
+        """
+        The payload pushed to Firebase must reflect the fresh-day
+        baseline -- passenger_count=0, available_seats=total_capacity,
+        occupancy_status='Available' -- so downstream readers see
+        an empty shuttle ready for the new day.
+        """
+        from unittest.mock import MagicMock
+        mock_sync = MagicMock()
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, firebase_sync=mock_sync
+        )
+
+        manager.perform_reset("2026-05-26")
+
+        payload = mock_sync.sync_to_firebase.call_args[0][0]
+        assert payload["passenger_count"] == 0
+        assert payload["available_seats"] == 20
+        assert payload["occupancy_status"] == "Available"
+
+    def test_perform_reset_payload_uses_first_stop_as_current_stop(self):
+        """
+        Fresh-day baseline starts the shuttle at the first
+        designated stop. The Firebase payload must reflect this
+        so the mobile app's location display matches reality.
+        """
+        from unittest.mock import MagicMock
+        mock_sync = MagicMock()
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, firebase_sync=mock_sync
+        )
+
+        manager.perform_reset("2026-05-26")
+
+        payload = mock_sync.sync_to_firebase.call_args[0][0]
+        assert payload["current_stop"] == "Western Gate"
+
+    def test_perform_reset_payload_next_stop_is_second_in_route(self):
+        """
+        next_stop in the payload should be the second stop in the
+        designated_stops list since the shuttle is starting at the
+        first one. This matches the wraparound logic CountingLogic
+        uses elsewhere.
+        """
+        from unittest.mock import MagicMock
+        mock_sync = MagicMock()
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, firebase_sync=mock_sync
+        )
+
+        manager.perform_reset("2026-05-26")
+
+        payload = mock_sync.sync_to_firebase.call_args[0][0]
+        assert payload["next_stop"] == "CEDAT"
+
+    def test_perform_reset_skipped_firebase_when_sync_is_none(self):
+        """
+        With no firebase_sync, perform_reset still completes the
+        SQLite reset cleanly -- backward compatibility is
+        preserved. The Firebase sync step is simply omitted.
+        """
+        manager = ServiceDayManager(db_path=self.TEST_DB)
+        manager.perform_reset("2026-05-26")
+
+        # SQLite reset should still have happened
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='available_seats'"
+        )
+        assert cursor.fetchone()[0] == "20"
+        conn.close()
+
+    def test_perform_reset_continues_on_firebase_failure(self):
+        """
+        If Firebase sync throws (network outage, permission issue),
+        the SQLite reset must still succeed. We never want the
+        local source of truth to be blocked by a Firebase issue --
+        offline-first principle.
+        """
+        from unittest.mock import MagicMock
+        mock_sync = MagicMock()
+        mock_sync.sync_to_firebase.side_effect = Exception("Firebase down")
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, firebase_sync=mock_sync
+        )
+
+        # Should NOT raise
+        manager.perform_reset("2026-05-26")
+
+        # SQLite reset should still have happened
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='last_reset_date'"
+        )
+        assert cursor.fetchone()[0] == "2026-05-26"
+        conn.close()
