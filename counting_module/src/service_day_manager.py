@@ -258,8 +258,17 @@ class ServiceDayManager:
             return
 
         try:
-            # compute next_stop with wraparound
-            stops_list = []
+            # compute next_stop with wraparound. Fall back to the
+            # same default stops list CountingLogic uses when
+            # designated_stops is absent from SQLite — keeps Firebase
+            # consistent even on a fresh deployment where the
+            # operator hasn't saved a stops configuration yet.
+            DEFAULT_STOPS = [
+                "Western Gate", "CEDAT", "CONAS", "Main Library",
+                "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                "COCIS", "Complex Hall", "CEES", "Lumumba Hall",
+            ]
+            stops_list = DEFAULT_STOPS
             try:
                 import json as _json
                 conn = sqlite3.connect(self.db_path)
@@ -272,7 +281,7 @@ class ServiceDayManager:
                 if row and row[0]:
                     stops_list = _json.loads(row[0])
             except (sqlite3.Error, ValueError):
-                stops_list = []
+                pass  # keep the default
 
             next_stop = stops_list[1] if len(stops_list) > 1 else first_stop
 
