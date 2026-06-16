@@ -1,14 +1,11 @@
 import pytest
 import os
 import sys
+import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from object_tracking import ObjectTracking
-
-# skip conditions for CI environment
-MODEL_AVAILABLE = os.path.exists("models/yolov8n.pt")
-VIDEO_AVAILABLE = os.path.exists("data/test_video.mp4")
 
 
 @pytest.fixture
@@ -20,19 +17,28 @@ def loaded_tracker():
 
 
 @pytest.fixture
-def real_detections():
-    """Provides real detections and frame from YOLOv8n for tracking tests"""
-    from object_detection import ObjectDetection
-    from camera_interface import CameraInterface
+def synthetic_detections():
+    """
+    Provides synthetic detections in the format ObjectTracking expects:
+    a list of dicts with bbox as [x1, y1, x2, y2] (top-left, bottom-right
+    in pixel coordinates), plus confidence and class. Tests tracking
+    behavior in isolation from the YOLO detection layer, so these tests
+    do not depend on data/test_video.mp4 or models/yolov8n.pt.
 
-    camera = CameraInterface(source="data/test_video.mp4")
-    camera.start()
-    frame = camera.capture_frame()
-    camera.stop()
-
-    detector = ObjectDetection(model_path="models/yolov8n.pt")
-    detector.load_model()
-    detections = detector.detect_persons(frame)
+    The synthetic frame contains distinct coloured patches inside each
+    bbox so DeepSORT's appearance embedder has real visual signal to
+    extract; without this, identical pixel content across detections
+    causes the embedder to produce degenerate features and tracking fails.
+    """
+    # bboxes in [x1, y1, x2, y2] format -- this is what ObjectTracking
+    # expects (see object_tracking.py line 44).
+    detections = [
+        {"bbox": [800, 400, 1000, 900], "confidence": 0.95, "class": "person"},
+        {"bbox": [1200, 350, 1420, 870], "confidence": 0.92, "class": "person"},
+    ]
+    frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+    frame[400:900, 800:1000] = [200, 100, 50]
+    frame[350:870, 1200:1420] = [50, 150, 200]
     return detections, frame
 
 
@@ -134,54 +140,50 @@ class TestPersonTracking:
         tracks = loaded_tracker.track_persons([])
         assert tracks == []
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_track_persons_assigns_track_id_to_each_person(self, loaded_tracker, real_detections):
+    def test_track_persons_assigns_track_id_to_each_person(self, loaded_tracker, synthetic_detections):
         """
         Test that track_persons() assigns a unique track ID to each
         detected person so the Counting Logic Component can identify
         and count individual passengers accurately
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks = loaded_tracker.track_persons(detections, frame)
         assert len(tracks) > 0
         for track in tracks:
             assert "track_id" in track
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_each_tracked_person_has_bounding_box(self, loaded_tracker, real_detections):
+    def test_each_tracked_person_has_bounding_box(self, loaded_tracker, synthetic_detections):
         """
         Test that each tracked person has a bounding box so the Counting
         Logic Component can determine their position and direction
         of movement through the virtual entrance and exit zones
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks = loaded_tracker.track_persons(detections, frame)
         for track in tracks:
             assert "bbox" in track
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_each_tracked_person_has_unique_track_id(self, loaded_tracker, real_detections):
+    def test_each_tracked_person_has_unique_track_id(self, loaded_tracker, synthetic_detections):
         """
         Test that each tracked person has a unique track ID to confirm
         DeepSORT is correctly distinguishing between different passengers
         and not assigning the same ID to multiple people
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks = loaded_tracker.track_persons(detections, frame)
         track_ids = [track["track_id"] for track in tracks]
         assert len(track_ids) == len(set(track_ids))
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_track_persons_maintains_same_id_across_frames(self, loaded_tracker, real_detections):
+    def test_track_persons_maintains_same_id_across_frames(self, loaded_tracker, synthetic_detections):
         """
         Test that track_persons() maintains the same track ID for the
         same person across consecutive frames to prevent double counting
         in the Counting Logic Component
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks1 = loaded_tracker.track_persons(detections, frame)
         tracks2 = loaded_tracker.track_persons(detections, frame)
@@ -189,14 +191,13 @@ class TestPersonTracking:
         ids2 = set([track["track_id"] for track in tracks2])
         assert len(ids1.intersection(ids2)) > 0
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_track_persons_handles_multiple_persons_simultaneously(self, loaded_tracker, real_detections):
+    def test_track_persons_handles_multiple_persons_simultaneously(self, loaded_tracker, synthetic_detections):
         """
         Test that track_persons() correctly tracks multiple persons at
         the same time to handle simultaneous boarding and alighting
         events as required by FR-CM-2.4
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks = loaded_tracker.track_persons(detections, frame)
         assert len(tracks) >= 1
@@ -204,14 +205,13 @@ class TestPersonTracking:
 
 class TestOcclusionHandling:
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_track_maintained_when_person_temporarily_occluded(self, loaded_tracker, real_detections):
+    def test_track_maintained_when_person_temporarily_occluded(self, loaded_tracker, synthetic_detections):
         """
         Test that a track is maintained when a person is temporarily
         occluded to prevent incorrect counting when passengers are
         briefly blocked from the camera view
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks = loaded_tracker.track_persons(detections, frame)
         initial_ids = set([track["track_id"] for track in tracks])
@@ -221,14 +221,13 @@ class TestOcclusionHandling:
         reappeared_ids = set([track["track_id"] for track in reappeared_tracks])
         assert len(initial_ids.intersection(reappeared_ids)) > 0
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
-    def test_person_reidentified_after_reappearing(self, loaded_tracker, real_detections):
+    def test_person_reidentified_after_reappearing(self, loaded_tracker, synthetic_detections):
         """
         Test that a person is re-identified with the same track ID after
         reappearing within max_age frames to ensure accurate counting
         and prevent the same person being counted twice
         """
-        detections, frame = real_detections
+        detections, frame = synthetic_detections
         for _ in range(4):
             tracks = loaded_tracker.track_persons(detections, frame)
         initial_ids = set([track["track_id"] for track in tracks])
