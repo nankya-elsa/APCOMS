@@ -234,6 +234,8 @@ def main():
     firebase_sync_interval = 2
     storage_check_interval = 3600
 
+    track_centroids = {}
+
     try:
         while True:
             # capture frame
@@ -252,12 +254,27 @@ def main():
             # track persons
             tracks = tracker.track_persons(detections, frame)
 
-            # update count for each track
+           # update count for each track
             for track in tracks:
+                track_id = track.get("track_id", 0)
+
+                # compute centroid from the current bbox (centre of the box)
+                x1, y1, x2, y2 = track["bbox"]
+                current_centroid = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+                # look up where this track was last frame; if it's new,
+                # seed previous = current so it can't appear to "cross"
+                # the line on its very first frame (would otherwise
+                # produce a false count the instant a track is born)
+                previous_centroid = track_centroids.get(track_id, current_centroid)
+
+                # remember current position for next frame
+                track_centroids[track_id] = current_centroid
+
                 track_dict = {
-                    "track_id": track.get("track_id", 0),
-                    "previous_centroid": track.get("previous_centroid", (0, 0)),
-                    "current_centroid": track.get("current_centroid", (0, 540))
+                    "track_id": track_id,
+                    "previous_centroid": previous_centroid,
+                    "current_centroid": current_centroid,
                 }
 
                 # capture count BEFORE update so we can detect if it actually changed
