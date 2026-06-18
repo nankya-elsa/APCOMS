@@ -32,6 +32,7 @@ without mocking the Firebase library.
 import os
 import sqlite3
 import logging
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -68,6 +69,14 @@ class BookingFirebaseListener:
         )
         self.db_path = db_path or "local_database/apcoms.db"
         self.seat_pool_manager = seat_pool_manager
+        # Serialise on_booking_event so that the streaming listener and
+        # the polling fallback can never both decide to act on the same
+        # booking event in the same race window. Without this, both
+        # threads can read last_status=None, both decrement, and the
+        # seat pool double-acts. The SQLite idempotency table is the
+        # source of truth but the read+write needs to be atomic, which
+        # the lock guarantees.
+        self._event_lock = threading.Lock()
 
     def on_booking_event(self, booking_id, booking_data):
         """
@@ -95,19 +104,24 @@ class BookingFirebaseListener:
         if not status:
             return
 
-        last_status = self._get_last_processed_status(booking_id)
+        # Hold the lock across the read-check-act-write sequence so
+        # the streaming listener thread and the poller thread can never
+        # both squeeze through the idempotency check before either has
+        # marked the booking as processed.
+        with self._event_lock:
+            last_status = self._get_last_processed_status(booking_id)
 
-        # already at this status -- nothing to do
-        if last_status == status:
-            return
+            # already at this status -- nothing to do
+            if last_status == status:
+                return
 
-        if status == "reserved":
-            self._handle_reserved(booking_id, last_status)
-        elif status == "cancelled":
-            self._handle_cancelled(booking_id, booking_data, last_status)
-        # active/completed/anything else: ignore, but mark status
-        # so future events for this booking know the history.
-        self._mark_processed(booking_id, status)
+            if status == "reserved":
+                self._handle_reserved(booking_id, last_status)
+            elif status == "cancelled":
+                self._handle_cancelled(booking_id, booking_data, last_status)
+            # active/completed/anything else: ignore, but mark status
+            # so future events for this booking know the history.
+            self._mark_processed(booking_id, status)
 
     def _handle_reserved(self, booking_id, last_status):
         """
