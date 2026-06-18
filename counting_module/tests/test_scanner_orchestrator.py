@@ -640,6 +640,7 @@ class TestRunMainLoop:
     and operator gating together.
     """
 
+    @patch("scanner_orchestrator.db.reference")
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
@@ -656,6 +657,7 @@ class TestRunMainLoop:
         mock_run_queue,
         mock_advance,
         mock_subprocess,
+        mock_db_reference,
     ):
         """
         A complete cycle through run() should: read the current
@@ -687,6 +689,7 @@ class TestRunMainLoop:
         mock_advance.assert_called_once()
         mock_input.assert_called_once()
 
+    @patch("scanner_orchestrator.db.reference")
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
@@ -703,6 +706,7 @@ class TestRunMainLoop:
         mock_run_queue,
         mock_advance,
         mock_subprocess,
+        mock_db_reference,
     ):
         """
         After the operator presses Enter at the end of a cycle,
@@ -728,6 +732,7 @@ class TestRunMainLoop:
         assert mock_subprocess.call_count == 2
         assert mock_advance.call_count == 2
 
+    @patch("scanner_orchestrator.db.reference")
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
@@ -746,6 +751,7 @@ class TestRunMainLoop:
         mock_run_queue,
         mock_advance,
         mock_subprocess,
+        mock_db_reference,
     ):
         """
         When should_stop_here returns False, the orchestrator must
@@ -776,6 +782,7 @@ class TestRunMainLoop:
         mock_run_queue.assert_called_with("CEDAT")
         assert mock_subprocess.call_count == 1
 
+    @patch("scanner_orchestrator.db.reference")
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
@@ -790,6 +797,7 @@ class TestRunMainLoop:
         mock_run_queue,
         mock_advance,
         mock_subprocess,
+        mock_db_reference,
     ):
         """
         Ctrl+C should exit the run loop cleanly rather than
@@ -809,6 +817,7 @@ class TestRunMainLoop:
         except KeyboardInterrupt:
             pytest.fail("run() should catch KeyboardInterrupt internally")
 
+    @patch("scanner_orchestrator.db.reference")
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
@@ -827,6 +836,7 @@ class TestRunMainLoop:
         mock_run_queue,
         mock_advance,
         mock_subprocess,
+        mock_db_reference,
     ):
         """
         At an alighting-only stop (passengers want to leave but
