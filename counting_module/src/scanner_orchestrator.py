@@ -216,6 +216,60 @@ class ScannerOrchestrator:
 
         return False
 
+    def has_alightings_here(self, stop):
+        """
+        Decide whether AI counting should run at this stop because
+        passengers onboard expect to alight here.
+
+        Mirrors has_pickups_here() but for the alighting side: returns
+        True when there is at least one active booking (passenger
+        currently on the shuttle, having already scanned at their
+        pickup) whose destination_stop matches the given stop.
+
+        Used by run() to decide whether to launch main.py when the
+        scanner queue produced zero scans. If nobody scanned AND
+        nobody onboard is expecting to alight here, main.py has
+        nothing to do and should be skipped to avoid wasteful AI
+        runs that produce phantom counts.
+
+        On Firebase failure, returns True conservatively so main.py
+        runs anyway. Better a wasted AI run than a missed alighting
+        because of a network glitch.
+
+        Args:
+            stop: The shuttle stop name being evaluated.
+
+        Returns:
+            True if at least one active booking has destination_stop
+            == stop for this shuttle. False otherwise.
+        """
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(
+                f"Error querying bookings for alighting check ({stop}): {e}"
+            )
+            return True  # safe fallback
+
+        if not all_bookings:
+            return False
+
+        for _, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+            if booking.get("status") != "active":
+                continue
+            if booking.get("destination_stop") != stop:
+                continue
+            return True
+
+        return False
+
     def read_current_stop(self):
         """
         Read the shuttle's current stop from SQLite system_state.
@@ -742,23 +796,35 @@ class ScannerOrchestrator:
                         f"scanned at {current_stop}"
                     )
                 else:
+                    scan_count = 0
                     logger.info(
                         f"[NO SCANNER] {current_stop} is an "
                         f"alighting-only stop - passengers will be "
                         f"counted as they leave the shuttle"
                     )
 
-                # phase 2: launch main.py and wait for the boarding
-                # scenario to play through. subprocess.run is
-                # blocking so we never advance until main.py exits.
-                main_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..",
-                    "main.py",
-                )
-                logger.info("[LAUNCHING MAIN.PY] Boarding scenario...")
-                subprocess.run([sys.executable, main_script])
-                logger.info("[MAIN.PY COMPLETE] Boarding scenario finished")
+                # phase 2: launch main.py ONLY when there's something
+                # for the AI counter to do — either boarders just
+                # scanned (scan_count > 0) or alightings are expected
+                # at this stop. If nobody scanned and nobody onboard
+                # is alighting here, main.py would just play a video
+                # for no reason, producing phantom counts and FPS
+                # noise. Skip in that case; no-show cancellation in
+                # advance_and_sync still releases the held seats.
+                if scan_count > 0 or self.has_alightings_here(current_stop):
+                    main_script = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "..",
+                        "main.py",
+                    )
+                    logger.info("[LAUNCHING MAIN.PY] Boarding scenario...")
+                    subprocess.run([sys.executable, main_script])
+                    logger.info("[MAIN.PY COMPLETE] Boarding scenario finished")
+                else:
+                    logger.info(
+                        f"[SKIPPING MAIN.PY] No boardings happened "
+                        f"and no alightings expected at {current_stop}"
+                    )
 
                 # phase 3: shuttle pulls away from this stop
                 self.advance_and_sync()
@@ -772,5 +838,14 @@ class ScannerOrchestrator:
                 input()
         except KeyboardInterrupt:
             logger.info("\n[ORCHESTRATOR EXITING] Shutdown requested")
+            # Force-exit so background threads (Firebase .listen() stream,
+            # poller, etc.) can't keep the Python process alive after the
+            # operator has asked to quit. Plain sys.exit() raises
+            # SystemExit which still waits on non-daemon threads; os._exit
+            # is the nuclear option that returns the terminal to a prompt
+            # immediately. Safe here because all our writes (SQLite,
+            # Firebase) commit synchronously — no buffered state to lose.
+            import os
+            os._exit(0)
 
 
