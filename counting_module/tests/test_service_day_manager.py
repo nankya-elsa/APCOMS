@@ -800,3 +800,250 @@ class TestPerformResetSyncsFirebase:
         )
         assert cursor.fetchone()[0] == "2026-05-26"
         conn.close()
+
+
+class TestCancelStaleBookings:
+    """
+    Tests covering the new cancel_stale_bookings step that fires
+    inside perform_reset() at the service-day boundary.
+
+    The shuttle's seat pool gets reset to total_capacity at 06:00
+    every morning, but bookings in Firebase don't reset automatically.
+    Any reserved or active bookings left over from yesterday survive
+    into today and desync the system: has_pickups_here() sees phantom
+    pickups, the scanner queue opens for passengers who never arrive,
+    and the dashboard shows expected boardings that won't happen.
+
+    The fix: at reset, every reserved/active booking gets flipped to
+    cancelled with reason 'stale_from_previous_day'. The seat pool is
+    NOT touched — it's already been reset to total_capacity, so
+    incrementing for each cancelled stale booking would push it over.
+
+    To keep ServiceDayManager testable without firebase-admin, the
+    Firebase reference is injected through the constructor as
+    bookings_ref. Tests pass a MagicMock; production wiring passes
+    db.reference('bookings').
+    """
+
+    TEST_DB = "local_database/test_apcoms.db"
+
+    def setup_method(self):
+        """Clean and seed the test database for each test."""
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(self.TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS system_state")
+        cursor.execute("""
+            CREATE TABLE system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO system_state (key, value)
+            VALUES ('total_capacity', '20')
+        """)
+        conn.commit()
+        conn.close()
+
+    def test_manager_accepts_optional_bookings_ref(self):
+        """
+        The manager should accept an optional bookings_ref so tests
+        can inject a mock and production can pass the live Firebase
+        reference, without forcing every legacy caller to update.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+        assert manager.bookings_ref is mock_ref
+
+    def test_bookings_ref_defaults_to_none(self):
+        """
+        Without an explicit bookings_ref, the attribute defaults to
+        None so legacy callers continue working as before. When None,
+        cancel_stale_bookings is a no-op.
+        """
+        manager = ServiceDayManager(db_path=self.TEST_DB)
+        assert manager.bookings_ref is None
+
+    def test_cancel_stale_bookings_flips_reserved_to_cancelled(self):
+        """
+        A reserved booking from yesterday must be flipped to
+        cancelled with reason 'stale_from_previous_day'.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "booking_001": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+                "pickup_stop": "Western Gate",
+            }
+        }
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 1
+        # the multi-path update payload should contain a status flip
+        # for booking_001 along with the stale reason
+        mock_ref.update.assert_called_once()
+        payload = mock_ref.update.call_args[0][0]
+        assert payload["booking_001/status"] == "cancelled"
+        assert payload["booking_001/cancel_reason"] == "stale_from_previous_day"
+        assert "booking_001/cancelled_at" in payload
+
+    def test_cancel_stale_bookings_flips_active_to_cancelled(self):
+        """
+        An active booking from yesterday (passenger scanned but
+        never alighted) must also be cancelled. They're not coming
+        back today.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "booking_002": {
+                "shuttle_key": "shuttle_001",
+                "status": "active",
+                "destination_stop": "CEDAT",
+            }
+        }
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 1
+        payload = mock_ref.update.call_args[0][0]
+        assert payload["booking_002/status"] == "cancelled"
+        assert payload["booking_002/cancel_reason"] == "stale_from_previous_day"
+
+    def test_cancel_stale_bookings_ignores_already_cancelled(self):
+        """
+        Bookings already in cancelled or completed status must be
+        left alone — they've already settled their lifecycle.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "old_cancel": {
+                "shuttle_key": "shuttle_001",
+                "status": "cancelled",
+            },
+            "old_complete": {
+                "shuttle_key": "shuttle_001",
+                "status": "completed",
+            },
+        }
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 0
+        # update should not be called at all when nothing is stale
+        mock_ref.update.assert_not_called()
+
+    def test_cancel_stale_bookings_filters_by_shuttle_id(self):
+        """
+        Bookings for a different shuttle must be left alone — this
+        reset is for shuttle_001 only.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "ours": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+            },
+            "theirs": {
+                "shuttle_key": "shuttle_002",
+                "status": "reserved",
+            },
+        }
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 1
+        payload = mock_ref.update.call_args[0][0]
+        assert "ours/status" in payload
+        assert "theirs/status" not in payload
+
+    def test_cancel_stale_bookings_handles_empty_bookings(self):
+        """
+        When Firebase /bookings is empty, return 0 without crashing.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = None
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 0
+        mock_ref.update.assert_not_called()
+
+    def test_cancel_stale_bookings_handles_firebase_error(self):
+        """
+        If Firebase .get() raises (network outage, auth issue), the
+        method should log and return 0 rather than crashing the
+        whole reset.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.side_effect = Exception("Firebase unreachable")
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB, bookings_ref=mock_ref
+        )
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 0
+        mock_ref.update.assert_not_called()
+
+    def test_cancel_stale_bookings_noop_when_ref_is_none(self):
+        """
+        Without a bookings_ref, the method is a no-op returning 0.
+        Legacy callers without Firebase wiring stay safe.
+        """
+        manager = ServiceDayManager(db_path=self.TEST_DB)
+
+        cancelled = manager.cancel_stale_bookings(shuttle_id="shuttle_001")
+
+        assert cancelled == 0
+
+    def test_perform_reset_calls_cancel_stale_bookings(self):
+        """
+        perform_reset() must call cancel_stale_bookings as part of
+        its standard sequence so legacy callers don't have to
+        invoke both methods themselves.
+        """
+        from unittest.mock import MagicMock
+        mock_ref = MagicMock()
+        mock_ref.get.return_value = {
+            "booking_x": {
+                "shuttle_key": "shuttle_001",
+                "status": "reserved",
+            }
+        }
+        manager = ServiceDayManager(
+            db_path=self.TEST_DB,
+            bookings_ref=mock_ref,
+            shuttle_id="shuttle_001",
+        )
+
+        manager.perform_reset(target_date="2026-06-19")
+
+        # The stale booking was cancelled as part of the reset
+        mock_ref.update.assert_called_once()

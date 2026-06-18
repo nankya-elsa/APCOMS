@@ -313,6 +313,34 @@ class TestUserCancellationEvents:
 
         mock_pool.increment.assert_not_called()
 
+    def test_stale_from_previous_day_cancellation_is_skipped(self):
+        """
+        ServiceDayManager.perform_reset() resets available_seats to
+        total_capacity at the service-day boundary BEFORE flipping
+        stale reserved/active bookings to cancelled with reason
+        'stale_from_previous_day'. The seat math is already correct
+        by the time those Firebase writes propagate; if the listener
+        also incremented, available_seats would drift above capacity.
+        The listener must recognise this reason and skip — same
+        pattern as no_show_at_pickup, different owner of the math.
+        """
+        mock_pool = MagicMock()
+        listener = BookingFirebaseListener(
+            shuttle_id="shuttle_001",
+            db_path=TEST_DB,
+            seat_pool_manager=mock_pool,
+        )
+        listener._mark_processed("booking_xyz", "reserved")
+
+        listener.on_booking_event("booking_xyz", {
+            "booking_id": "booking_xyz",
+            "shuttle_key": "shuttle_001",
+            "status": "cancelled",
+            "cancel_reason": "stale_from_previous_day",
+        })
+
+        mock_pool.increment.assert_not_called()
+
     def test_cancellation_without_prior_reserved_is_skipped(self):
         """
         If the booking was never seen as reserved (e.g. the
