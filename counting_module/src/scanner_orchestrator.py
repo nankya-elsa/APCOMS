@@ -26,6 +26,7 @@ import time
 import sqlite3
 import subprocess
 import logging
+import threading
 import firebase_admin
 from firebase_admin import credentials, db
 
@@ -35,6 +36,8 @@ from counting_logic import CountingLogic
 from firebase_sync import FirebaseSyncComponent
 from no_show_canceller import NoShowCanceller
 from service_day_manager import ServiceDayManager
+from seat_pool_manager import SeatPoolManager
+from booking_firebase_listener import BookingFirebaseListener
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +211,60 @@ class ScannerOrchestrator:
             if booking.get("status") != "reserved":
                 continue
             if booking.get("pickup_stop") != stop:
+                continue
+            return True
+
+        return False
+
+    def has_alightings_here(self, stop):
+        """
+        Decide whether AI counting should run at this stop because
+        passengers onboard expect to alight here.
+
+        Mirrors has_pickups_here() but for the alighting side: returns
+        True when there is at least one active booking (passenger
+        currently on the shuttle, having already scanned at their
+        pickup) whose destination_stop matches the given stop.
+
+        Used by run() to decide whether to launch main.py when the
+        scanner queue produced zero scans. If nobody scanned AND
+        nobody onboard is expecting to alight here, main.py has
+        nothing to do and should be skipped to avoid wasteful AI
+        runs that produce phantom counts.
+
+        On Firebase failure, returns True conservatively so main.py
+        runs anyway. Better a wasted AI run than a missed alighting
+        because of a network glitch.
+
+        Args:
+            stop: The shuttle stop name being evaluated.
+
+        Returns:
+            True if at least one active booking has destination_stop
+            == stop for this shuttle. False otherwise.
+        """
+        self._ensure_firebase()
+
+        try:
+            ref = db.reference("bookings")
+            all_bookings = ref.get()
+        except Exception as e:
+            logger.error(
+                f"Error querying bookings for alighting check ({stop}): {e}"
+            )
+            return True  # safe fallback
+
+        if not all_bookings:
+            return False
+
+        for _, booking in all_bookings.items():
+            if not isinstance(booking, dict):
+                continue
+            if booking.get("shuttle_key") != self.shuttle_id:
+                continue
+            if booking.get("status") != "active":
+                continue
+            if booking.get("destination_stop") != stop:
                 continue
             return True
 
@@ -411,12 +468,30 @@ class ScannerOrchestrator:
         # capture the stop being LEFT before we advance — we need
         # it to find no-show bookings at this pickup stop
         stop_being_left = counting.get_current_stop()
+
+        # one FirebaseSync shared between the no-show canceller's
+        # seat-pool releases and the final advance-state push at
+        # the end of this method.
+        firebase = FirebaseSyncComponent(shuttle_id=self.shuttle_id)
+        firebase.initialize()
+
+        # SeatPoolManager wired with the shared sync so every seat
+        # release (no-show or otherwise) propagates to Firebase
+        # the moment it happens.
+        seat_pool = SeatPoolManager(
+            total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+            db_path=self.db_path,
+            firebase_sync=firebase,
+        )
+
         # cancel any reserved bookings whose passengers didn't scan
         # at this stop. Drains the retry queue too, so accumulated
         # cancellations from previous Firebase outages also get
         # applied this cycle.
         canceller = NoShowCanceller(
-            shuttle_id=self.shuttle_id, db_path=self.db_path
+            shuttle_id=self.shuttle_id,
+            db_path=self.db_path,
+            seat_pool_manager=seat_pool,
         )
         cancelled_count = canceller.cancel_no_shows(stop=stop_being_left)
         if cancelled_count > 0:
@@ -425,9 +500,6 @@ class ScannerOrchestrator:
                 f"at {stop_being_left}"
             )
         counting.advance_stop()
-
-        firebase = FirebaseSyncComponent(shuttle_id=self.shuttle_id)
-        firebase.initialize()
 
         current_stop = counting.get_current_stop()
         next_index = (counting.current_stop_index + 1) % len(
@@ -531,6 +603,117 @@ class ScannerOrchestrator:
             "occupancy_status": status,
         }
 
+    def _start_booking_listener(self):
+        """
+        Attach the BookingFirebaseListener to Firebase /bookings.
+
+        Builds a SeatPoolManager + BookingFirebaseListener and
+        registers a stream handler that fires our listener's
+        on_booking_event for every booking change. The listener
+        runs in the background for the lifetime of this orchestrator.
+        """
+        self._ensure_firebase()
+
+        firebase_sync_for_listener = FirebaseSyncComponent(
+            shuttle_id=self.shuttle_id
+        )
+        firebase_sync_for_listener.initialize()
+        seat_pool = SeatPoolManager(
+            total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+            db_path=self.db_path,
+            firebase_sync=firebase_sync_for_listener,
+        )
+        listener = BookingFirebaseListener(
+            shuttle_id=self.shuttle_id,
+            db_path=self.db_path,
+            seat_pool_manager=seat_pool,
+        )
+
+        def _handler(event):
+            # Firebase delivers updates in several shapes:
+            #   path=/                       initial full snapshot (data = all bookings)
+            #   path=/<booking_id>           whole booking OR a partial dict of changed fields
+            #   path=/<booking_id>/<field>   single field changed (data is a string/number)
+            #
+            # We can't trust the event's data to be complete -- on a
+            # multi-field update, Firebase may send only the changed
+            # subset. Always re-fetch the full booking when we have a
+            # specific booking_id, so the downstream listener has
+            # everything it needs (shuttle_key, status, cancel_reason).
+            path = (event.path or "").lstrip("/")
+            data = event.data
+
+            if not path:
+                # initial full snapshot -- iterate every booking
+                if isinstance(data, dict):
+                    for booking_id, booking_data in data.items():
+                        listener.on_booking_event(booking_id, booking_data)
+                return
+
+            booking_id = path.split("/")[0]
+
+            # always re-fetch the full booking to guarantee the
+            # downstream listener has shuttle_key + status + reason
+            try:
+                full = db.reference(f"bookings/{booking_id}").get()
+                if isinstance(full, dict):
+                    listener.on_booking_event(booking_id, full)
+            except Exception as e:
+                logger.error(
+                    f"Failed to fetch full booking {booking_id}: {e}"
+                )
+        try:
+            db.reference("bookings").listen(_handler)
+            logger.info("BookingFirebaseListener attached to /bookings")
+        except Exception as e:
+            logger.error(f"Failed to attach booking listener: {e}")
+
+        # Safety net: the streaming .listen() above catches new bookings
+        # reliably but misses modifications (cancels). A 2s poller
+        # routes those through the same listener for idempotent handling.
+        self._start_booking_poller(listener, poll_interval=2.0)
+
+    def _start_booking_poller(self, listener, poll_interval=2.0):
+        """
+        Poll Firebase /bookings every N seconds to catch booking
+        changes the streaming listener misses.
+
+        The firebase-admin Python SDK's .listen() reliably fires for
+        new bookings (child_added) but does NOT fire for modifications
+        to existing bookings (no child_changed semantics on its
+        streaming API). Cancels would otherwise go unnoticed until
+        the next orchestrator restart.
+
+        This poller is a safety net: every poll_interval seconds it
+        fetches the full /bookings snapshot and feeds each booking
+        through listener.on_booking_event. The existing SQLite
+        processed_bookings idempotency check (in BookingFirebaseListener)
+        ensures we only act on actual status transitions, so this is
+        safe to run alongside the streaming listener.
+
+        Runs in a daemon thread so it dies cleanly when the
+        orchestrator exits.
+        """
+        def _poll_loop():
+            while True:
+                try:
+                    all_bookings = db.reference("bookings").get()
+                    if isinstance(all_bookings, dict):
+                        for booking_id, booking_data in all_bookings.items():
+                            if isinstance(booking_data, dict):
+                                listener.on_booking_event(
+                                    booking_id, booking_data
+                                )
+                except Exception as e:
+                    logger.error(f"Booking poller error: {e}")
+                time.sleep(poll_interval)
+
+        thread = threading.Thread(target=_poll_loop, daemon=True)
+        thread.start()
+        logger.info(
+            f"Booking poller started (every {poll_interval}s)"
+        )
+
     def run(self):
         """
         Run the full orchestrator loop until the operator quits.
@@ -559,10 +742,26 @@ class ScannerOrchestrator:
         logger.info("Press Ctrl+C at the prompt to exit")
         logger.info("=" * 60)
 
-        service_day_manager = ServiceDayManager(db_path=self.db_path)
+        # firebase_sync wired in so the service-day reset propagates
+        # to Firebase, keeping the cloud baseline consistent with
+        # the local SQLite reset.
+        service_day_firebase = FirebaseSyncComponent(
+            shuttle_id=self.shuttle_id
+        )
+        service_day_firebase.initialize()
+        service_day_manager = ServiceDayManager(
+            db_path=self.db_path,
+            firebase_sync=service_day_firebase,
+        )
         reset_date = service_day_manager.reset_if_needed()
         if reset_date:
             logger.info(f"Service-day reset performed for {reset_date}")
+
+        # Start the booking listener so book / user-cancel events from
+        # Cissy's app flow into the seat pool while the shuttle runs.
+        # The listener attaches to Firebase /bookings and stays live
+        # for the duration of the orchestrator loop.
+        self._start_booking_listener()
 
         try:
             while True:
@@ -597,23 +796,35 @@ class ScannerOrchestrator:
                         f"scanned at {current_stop}"
                     )
                 else:
+                    scan_count = 0
                     logger.info(
                         f"[NO SCANNER] {current_stop} is an "
                         f"alighting-only stop - passengers will be "
                         f"counted as they leave the shuttle"
                     )
 
-                # phase 2: launch main.py and wait for the boarding
-                # scenario to play through. subprocess.run is
-                # blocking so we never advance until main.py exits.
-                main_script = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..",
-                    "main.py",
-                )
-                logger.info("[LAUNCHING MAIN.PY] Boarding scenario...")
-                subprocess.run([sys.executable, main_script])
-                logger.info("[MAIN.PY COMPLETE] Boarding scenario finished")
+                # phase 2: launch main.py ONLY when there's something
+                # for the AI counter to do — either boarders just
+                # scanned (scan_count > 0) or alightings are expected
+                # at this stop. If nobody scanned and nobody onboard
+                # is alighting here, main.py would just play a video
+                # for no reason, producing phantom counts and FPS
+                # noise. Skip in that case; no-show cancellation in
+                # advance_and_sync still releases the held seats.
+                if scan_count > 0 or self.has_alightings_here(current_stop):
+                    main_script = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "..",
+                        "main.py",
+                    )
+                    logger.info("[LAUNCHING MAIN.PY] Boarding scenario...")
+                    subprocess.run([sys.executable, main_script])
+                    logger.info("[MAIN.PY COMPLETE] Boarding scenario finished")
+                else:
+                    logger.info(
+                        f"[SKIPPING MAIN.PY] No boardings happened "
+                        f"and no alightings expected at {current_stop}"
+                    )
 
                 # phase 3: shuttle pulls away from this stop
                 self.advance_and_sync()
@@ -627,5 +838,14 @@ class ScannerOrchestrator:
                 input()
         except KeyboardInterrupt:
             logger.info("\n[ORCHESTRATOR EXITING] Shutdown requested")
+            # Force-exit so background threads (Firebase .listen() stream,
+            # poller, etc.) can't keep the Python process alive after the
+            # operator has asked to quit. Plain sys.exit() raises
+            # SystemExit which still waits on non-daemon threads; os._exit
+            # is the nuclear option that returns the terminal to a prompt
+            # immediately. Safe here because all our writes (SQLite,
+            # Firebase) commit synchronously — no buffered state to lose.
+            if "pytest" not in sys.modules:
+                os._exit(0)
 
 

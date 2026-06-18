@@ -578,3 +578,183 @@ class TestCancelNoShows:
         count = canceller.cancel_no_shows(stop="CONAS")
 
         assert count == 0
+
+
+class TestSeatReleaseOnCancellation:
+    """
+    Tests covering the seat-release behaviour when no-show
+    cancellations succeed.
+
+    In the soft-hold reservation model, every reserved booking
+    holds a seat (decrements available_seats at booking time).
+    When the NoShowCanceller cancels that reservation, the held
+    seat must return to the pool — otherwise available_seats
+    drifts permanently low and the shuttle gradually appears
+    full even when it isn't.
+
+    Seat release happens inside cancel_one() so the drain queue
+    gets it for free: every successful Firebase cancellation
+    (fresh OR retried from queue) releases exactly one seat
+    through seat_pool_manager.increment(reason="no_show").
+    """
+
+    def setup_method(self):
+        """Reset the queue table between tests."""
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS pending_cancellations")
+        conn.commit()
+        conn.close()
+
+    @patch("no_show_canceller.db")
+    def test_cancel_one_releases_seat_on_success(self, mock_db):
+        """
+        After a successful Firebase cancellation, the held seat
+        must return to the pool via seat_pool_manager.increment.
+        Without this, available_seats stays artificially low.
+        """
+        mock_root_ref = MagicMock()
+        mock_db.reference.return_value = mock_root_ref
+        mock_seat_pool = MagicMock()
+
+        canceller = NoShowCanceller(seat_pool_manager=mock_seat_pool)
+        result = canceller.cancel_one({
+            "booking_id": "abc",
+            "user_uid": "u1",
+            "status": "reserved",
+        })
+
+        assert result is True
+        mock_seat_pool.increment.assert_called_once_with(reason="no_show")
+
+    @patch("no_show_canceller.db")
+    def test_cancel_one_does_not_release_seat_on_firebase_failure(self, mock_db):
+        """
+        If Firebase rejects the cancellation, the seat must NOT
+        be released yet — the booking is still 'reserved' from
+        Firebase's perspective and will be retried via the queue.
+        Releasing prematurely would let the seat be double-booked.
+        """
+        mock_root_ref = MagicMock()
+        mock_root_ref.update.side_effect = Exception("Firebase down")
+        mock_db.reference.return_value = mock_root_ref
+        mock_seat_pool = MagicMock()
+
+        canceller = NoShowCanceller(seat_pool_manager=mock_seat_pool)
+        result = canceller.cancel_one({
+            "booking_id": "abc",
+            "user_uid": "u1",
+        })
+
+        assert result is False
+        mock_seat_pool.increment.assert_not_called()
+
+    @patch("no_show_canceller.db")
+    def test_cancel_one_does_not_release_seat_for_invalid_booking(self, mock_db):
+        """
+        A booking missing booking_id or user_uid is corrupt data;
+        cancel_one rejects it without writing to Firebase, so no
+        seat should be released either.
+        """
+        mock_seat_pool = MagicMock()
+        canceller = NoShowCanceller(seat_pool_manager=mock_seat_pool)
+
+        result = canceller.cancel_one({"status": "reserved"})
+
+        assert result is False
+        mock_seat_pool.increment.assert_not_called()
+
+    @patch("no_show_canceller.db")
+    def test_drain_queue_releases_seat_per_drained_cancellation(self, mock_db):
+        """
+        When the drain succeeds on N queued cancellations, the
+        pool must increment N times — one per booking that
+        finally got cancelled in Firebase. The held seats from
+        those bookings have been waiting through the outage.
+        """
+        canceller = NoShowCanceller(
+            db_path=TEST_DB,
+            seat_pool_manager=MagicMock(),
+        )
+        canceller._queue_cancellation({"booking_id": "a", "user_uid": "u1"})
+        canceller._queue_cancellation({"booking_id": "b", "user_uid": "u2"})
+
+        mock_root_ref = MagicMock()
+        mock_db.reference.return_value = mock_root_ref
+
+        drained = canceller._drain_queue()
+
+        assert drained == 2
+        assert canceller.seat_pool_manager.increment.call_count == 2
+        for call in canceller.seat_pool_manager.increment.call_args_list:
+            assert call.kwargs == {"reason": "no_show"}
+
+    @patch("no_show_canceller.db")
+    def test_no_seat_release_when_seat_pool_manager_is_none(self, mock_db):
+        """
+        seat_pool_manager is an optional dependency. With None,
+        cancel_one still succeeds (Firebase write goes through)
+        but the seat-release step is silently skipped. Keeps
+        legacy callers and older tests working unchanged.
+        """
+        mock_root_ref = MagicMock()
+        mock_db.reference.return_value = mock_root_ref
+
+        canceller = NoShowCanceller(seat_pool_manager=None)
+        result = canceller.cancel_one({
+            "booking_id": "abc",
+            "user_uid": "u1",
+            "status": "reserved",
+        })
+
+        assert result is True
+
+    @patch("no_show_canceller.db")
+    def test_seat_pool_increment_errors_do_not_break_cancellation(self, mock_db):
+        """
+        If seat_pool_manager.increment throws for any reason,
+        cancel_one must still return True — Firebase already
+        accepted the cancellation, so the booking IS cancelled.
+        The seat-release failure gets logged but doesn't undo
+        the Firebase write. We trust the next cycle to reconcile.
+        """
+        mock_root_ref = MagicMock()
+        mock_db.reference.return_value = mock_root_ref
+        mock_seat_pool = MagicMock()
+        mock_seat_pool.increment.side_effect = Exception("Seat pool error")
+
+        canceller = NoShowCanceller(seat_pool_manager=mock_seat_pool)
+        result = canceller.cancel_one({
+            "booking_id": "abc",
+            "user_uid": "u1",
+            "status": "reserved",
+        })
+
+        assert result is True
+
+
+class TestNoShowCancellerSeatPoolConstructor:
+    """
+    Tests covering the optional seat_pool_manager constructor
+    parameter added for the soft-hold reservation model.
+    """
+
+    def test_canceller_accepts_seat_pool_manager(self):
+        """
+        Constructor accepts an optional seat_pool_manager so
+        production code can wire in a real SeatPoolManager
+        instance while tests pass mocks.
+        """
+        mock_seat_pool = MagicMock()
+        canceller = NoShowCanceller(seat_pool_manager=mock_seat_pool)
+        assert canceller.seat_pool_manager is mock_seat_pool
+
+    def test_seat_pool_manager_defaults_to_none(self):
+        """
+        Without an explicit override, seat_pool_manager defaults
+        to None so cancel_one can detect the missing dependency
+        and skip the seat-release step gracefully.
+        """
+        canceller = NoShowCanceller()
+        assert canceller.seat_pool_manager is None

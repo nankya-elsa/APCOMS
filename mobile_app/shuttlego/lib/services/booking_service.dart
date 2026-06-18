@@ -243,10 +243,8 @@ class BookingService {
     final shuttleData = shuttleRaw is Map
         ? Map<String, Object?>.from(shuttleRaw)
         : const <String, Object?>{};
-    final cameraAvailableSeats = _readInt(shuttleData['available_seats']);
-    final reservedSeats = await _fetchActiveReservationCount(shuttleKey);
-    final bookableSeats = cameraAvailableSeats - reservedSeats;
-    if (bookableSeats <= 0) {
+    final availableSeats = _readInt(shuttleData['available_seats']);
+    if (availableSeats <= 0) {
       throw BookingException('No free seats available for this shuttle.');
     }
 
@@ -292,17 +290,22 @@ class BookingService {
 
   Future<void> cancelBooking({
     required BookingRecord booking,
-    required String reason,
+    String reason = 'Cancelled by user',
   }) async {
     if (!booking.isActive) {
       throw BookingException('Only active reservations can be cancelled.');
     }
 
+    // Empty/whitespace reasons collapse to the default so the shuttle
+    // listener never mistakes a user cancellation for a no-show.
+    final effectiveReason =
+        reason.trim().isEmpty ? 'Cancelled by user' : reason.trim();
+
     final updates = <String, Object?>{
       'user_bookings/${booking.userUid}/${booking.bookingId}/status':
           'cancelled',
       'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason':
-          reason.trim(),
+          effectiveReason,
       'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at':
           ServerValue.timestamp,
     };
@@ -322,14 +325,14 @@ class BookingService {
           'destination_stop': booking.destinationStop,
           'destination_index': booking.destinationIndex,
           'status': 'cancelled',
-          'cancel_reason': reason.trim(),
+          'cancel_reason': effectiveReason,
           'cancelled_at': ServerValue.timestamp,
           'created_at': booking.createdAt ?? ServerValue.timestamp,
         };
         updates['bookings/${booking.bookingId}'] = minimal;
       } else {
         updates['bookings/${booking.bookingId}/status'] = 'cancelled';
-        updates['bookings/${booking.bookingId}/cancel_reason'] = reason.trim();
+        updates['bookings/${booking.bookingId}/cancel_reason'] = effectiveReason;
         updates['bookings/${booking.bookingId}/cancelled_at'] =
             ServerValue.timestamp;
       }
@@ -346,7 +349,7 @@ class BookingService {
         'destination_stop': booking.destinationStop,
         'destination_index': booking.destinationIndex,
         'status': 'cancelled',
-        'cancel_reason': reason.trim(),
+        'cancel_reason': effectiveReason,
         'cancelled_at': ServerValue.timestamp,
         'created_at': booking.createdAt ?? ServerValue.timestamp,
       };
@@ -372,18 +375,6 @@ class BookingService {
   /// `user_bookings`. If `userUid` is provided only that user's bookings are
   /// processed; otherwise all users are scanned. Returns the number of
   /// booking entries created or updated.
-  
-
-  Future<int> _fetchActiveReservationCount(String shuttleKey) async {
-    final snapshot = await _database
-        .ref()
-        .child('bookings')
-        .orderByChild('shuttle_key')
-        .equalTo(shuttleKey)
-        .get();
-
-    return _countActiveReservations(snapshot.value);
-  }
 
   Future<bool> _hasActiveUserBooking(String userUid) async {
     // Query the user's bookings for any entry with status == 'reserved'.

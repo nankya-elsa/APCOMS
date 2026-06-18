@@ -96,9 +96,20 @@ class FlaskDashboard:
         semantics — see its module docstring for details.
         """
         from service_day_manager import ServiceDayManager
+        from firebase_sync import FirebaseSyncComponent
+        import os as _os
 
         try:
-            manager = ServiceDayManager(db_path="local_database/apcoms.db")
+            # firebase_sync wired so the service-day reset also
+            # propagates to Firebase, not just SQLite.
+            firebase_sync = FirebaseSyncComponent(
+                shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+            )
+            firebase_sync.initialize()
+            manager = ServiceDayManager(
+                db_path="local_database/apcoms.db",
+                firebase_sync=firebase_sync,
+            )
             reset_date = manager.reset_if_needed()
             if reset_date:
                 logger.info(

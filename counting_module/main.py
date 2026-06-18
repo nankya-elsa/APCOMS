@@ -21,6 +21,7 @@ from system_monitor import SystemMonitor
 from scenario_manager import ScenarioManager
 from booking_completer import BookingCompleter
 from service_day_manager import ServiceDayManager
+from seat_pool_manager import SeatPoolManager
 
 def draw_ai_visualization(frame, tracks, counting_logic, current_stop):
     """
@@ -145,7 +146,13 @@ def main():
     # Resets live shuttle state to fresh-day baseline if a new
     # service day has begun since the last reset. Safe to call —
     # only performs work if a reset is actually due today.
-    service_day_manager = ServiceDayManager()
+    service_day_firebase = FirebaseSyncComponent(
+        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
+    )
+    service_day_firebase.initialize()
+    service_day_manager = ServiceDayManager(
+        firebase_sync=service_day_firebase
+    )
     reset_date = service_day_manager.reset_if_needed()
     if reset_date:
         logger.info(f"Service-day reset performed for {reset_date}")
@@ -161,8 +168,25 @@ def main():
     system_monitor = SystemMonitor(data_logger=data_logger)
     system_monitor.initialize()
 
+    # Firebase Sync — constructed early so SeatPoolManager can use it
+    firebase_sync = FirebaseSyncComponent(
+        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
+    )
+    firebase_sync.initialize()
+
+    # Seat Pool Manager — owns available_seats, syncs every mutation
+    # to Firebase. CountingLogic delegates alighting seat releases here.
+    seat_pool_manager = SeatPoolManager(
+        total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+        db_path="local_database/apcoms.db",
+        firebase_sync=firebase_sync,
+    )
+
     # Counting Logic
-    counting_logic = CountingLogic(data_logger=data_logger)
+    counting_logic = CountingLogic(
+        data_logger=data_logger,
+        seat_pool_manager=seat_pool_manager,
+    )
     counting_logic.initialize()
 
     # Scenario Manager - decides which video to play this run
@@ -195,12 +219,6 @@ def main():
     display = DisplayComponent()
     display.initialize_display()
 
-    # Firebase Sync
-    firebase_sync = FirebaseSyncComponent(
-        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
-    )
-    firebase_sync.initialize()
-
     # Booking Completer — marks bookings as 'completed' on alighting
     booking_completer = BookingCompleter()
 
@@ -215,6 +233,8 @@ def main():
     last_storage_check = time.time()
     firebase_sync_interval = 2
     storage_check_interval = 3600
+
+    track_centroids = {}
 
     try:
         while True:
@@ -234,12 +254,27 @@ def main():
             # track persons
             tracks = tracker.track_persons(detections, frame)
 
-            # update count for each track
+           # update count for each track
             for track in tracks:
+                track_id = track.get("track_id", 0)
+
+                # compute centroid from the current bbox (centre of the box)
+                x1, y1, x2, y2 = track["bbox"]
+                current_centroid = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+                # look up where this track was last frame; if it's new,
+                # seed previous = current so it can't appear to "cross"
+                # the line on its very first frame (would otherwise
+                # produce a false count the instant a track is born)
+                previous_centroid = track_centroids.get(track_id, current_centroid)
+
+                # remember current position for next frame
+                track_centroids[track_id] = current_centroid
+
                 track_dict = {
-                    "track_id": track.get("track_id", 0),
-                    "previous_centroid": track.get("previous_centroid", (0, 0)),
-                    "current_centroid": track.get("current_centroid", (0, 540))
+                    "track_id": track_id,
+                    "previous_centroid": previous_centroid,
+                    "current_centroid": current_centroid,
                 }
 
                 # capture count BEFORE update so we can detect if it actually changed

@@ -230,9 +230,7 @@ class _ShuttleCard extends StatelessWidget {
         final rawAvailableSeats = _readInt(data['available_seats']);
         final occupiedSeats = _readInt(data['current_count']);
         final reservedSeats = availability?.reservedSeats ?? 0;
-        final availableSeats = (rawAvailableSeats - reservedSeats)
-            .clamp(0, 999)
-            .toInt();
+        final availableSeats = rawAvailableSeats.clamp(0, 999).toInt();
         final occupancyStatus = (data['occupancy_status'] as String?)?.trim();
 
         final currentStop =
