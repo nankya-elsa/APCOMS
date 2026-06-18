@@ -812,6 +812,7 @@ class TestRunMainLoop:
     @patch("scanner_orchestrator.subprocess.run")
     @patch.object(ScannerOrchestrator, "advance_and_sync")
     @patch.object(ScannerOrchestrator, "run_scan_queue")
+    @patch.object(ScannerOrchestrator, "has_alightings_here")
     @patch.object(ScannerOrchestrator, "has_pickups_here")
     @patch.object(ScannerOrchestrator, "should_stop_here")
     @patch.object(ScannerOrchestrator, "read_current_stop")
@@ -822,6 +823,7 @@ class TestRunMainLoop:
         mock_read_stop,
         mock_should_stop,
         mock_has_pickups,
+        mock_has_alightings,
         mock_run_queue,
         mock_advance,
         mock_subprocess,
@@ -837,7 +839,8 @@ class TestRunMainLoop:
         """
         mock_read_stop.return_value = "Main Library"
         mock_should_stop.return_value = True
-        mock_has_pickups.return_value = False  # alighting-only stop
+        mock_has_pickups.return_value = False    # alighting-only stop
+        mock_has_alightings.return_value = True  # someone IS alighting here
         mock_input.side_effect = KeyboardInterrupt()
 
         orchestrator = ScannerOrchestrator(db_path=TEST_DB)

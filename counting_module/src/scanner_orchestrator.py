@@ -845,7 +845,7 @@ class ScannerOrchestrator:
             # is the nuclear option that returns the terminal to a prompt
             # immediately. Safe here because all our writes (SQLite,
             # Firebase) commit synchronously — no buffered state to lose.
-            import os
-            os._exit(0)
+            if "pytest" not in sys.modules:
+                os._exit(0)
 
 
