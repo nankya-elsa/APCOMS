@@ -63,7 +63,7 @@ class ServiceDayManager:
                  during reset. Defaults to the production path.
     """
 
-    def __init__(self, db_path=None, firebase_sync=None):
+    def __init__(self, db_path=None, firebase_sync=None, bookings_ref=None, shuttle_id=None):
         """
         Initialize the ServiceDayManager.
 
@@ -75,9 +75,26 @@ class ServiceDayManager:
                            baseline to Firebase too, keeping the
                            cloud state consistent with the local
                            reset. When None, only SQLite is reset.
+            bookings_ref:  Optional Firebase Realtime Database
+                           reference for /bookings. When provided,
+                           perform_reset will also flip any
+                           reserved/active bookings from a previous
+                           service day to cancelled (reason
+                           'stale_from_previous_day') so the new
+                           day starts with a clean booking pool.
+                           When None, stale-booking cancellation is
+                           a no-op and legacy callers continue
+                           working as before.
+            shuttle_id:    The shuttle this manager is for; used to
+                           filter bookings during the stale-cancel
+                           sweep. Defaults to None — when paired with
+                           bookings_ref the caller MUST supply it
+                           or no bookings will match.
         """
         self.db_path = db_path or "local_database/apcoms.db"
         self.firebase_sync = firebase_sync
+        self.bookings_ref = bookings_ref
+        self.shuttle_id = shuttle_id
 
     def should_reset(self):
         """
@@ -155,6 +172,90 @@ class ServiceDayManager:
         except sqlite3.Error as e:
             logger.error(f"Error reading state '{key}': {e}")
             return None
+
+    STALE_REASON = "stale_from_previous_day"
+
+    def cancel_stale_bookings(self, shuttle_id=None):
+        """
+        Cancel every reserved or active booking left over from a
+        previous service day.
+
+        Called by perform_reset at the service-day boundary. By the
+        time this runs, the local SQLite live state (count,
+        available_seats) has already been reset to fresh-day
+        baseline. Stale bookings in Firebase would otherwise
+        desync the system: has_pickups_here() would see phantom
+        pickups, the scanner queue would open for passengers who
+        never come, and the dashboard would show expected boardings
+        that won't happen.
+
+        The cancellation does NOT touch the seat pool. available_seats
+        is already at total_capacity from the reset — incrementing
+        for each stale booking would push it above capacity. The
+        BookingFirebaseListener must also recognise this cancel
+        reason and skip its own increment (mirroring the existing
+        'no_show_at_pickup' skip).
+
+        Args:
+            shuttle_id: Filter bookings to this shuttle only. If
+                        omitted, falls back to self.shuttle_id.
+
+        Returns:
+            The count of bookings cancelled (0 if none, or if
+            bookings_ref is not configured, or if Firebase errored).
+        """
+        if self.bookings_ref is None:
+            return 0
+
+        target_shuttle = shuttle_id or self.shuttle_id
+
+        try:
+            all_bookings = self.bookings_ref.get()
+        except Exception as e:
+            logger.error(
+                f"Stale-booking cancel failed reading /bookings: {e}"
+            )
+            return 0
+
+        if not all_bookings or not isinstance(all_bookings, dict):
+            return 0
+
+        # collect every booking that needs cancelling
+        timestamp = datetime.datetime.now().isoformat()
+        update_payload = {}
+        cancel_count = 0
+
+        for booking_id, booking_data in all_bookings.items():
+            if not isinstance(booking_data, dict):
+                continue
+            if booking_data.get("shuttle_key") != target_shuttle:
+                continue
+            status = booking_data.get("status")
+            if status not in ("reserved", "active"):
+                continue
+
+            update_payload[f"{booking_id}/status"] = "cancelled"
+            update_payload[f"{booking_id}/cancel_reason"] = self.STALE_REASON
+            update_payload[f"{booking_id}/cancelled_at"] = timestamp
+            cancel_count += 1
+
+        if cancel_count == 0:
+            return 0
+
+        # one atomic multi-path update -- either all stale bookings
+        # flip together or none do, preventing partial state.
+        try:
+            self.bookings_ref.update(update_payload)
+            logger.info(
+                f"Cancelled {cancel_count} stale booking(s) "
+                f"from previous service day"
+            )
+            return cancel_count
+        except Exception as e:
+            logger.error(
+                f"Stale-booking cancel failed writing update: {e}"
+            )
+            return 0
 
     def perform_reset(self, target_date):
         """
@@ -248,6 +349,14 @@ class ServiceDayManager:
         except sqlite3.Error as e:
             logger.error(f"Error performing reset: {e}")
             return
+
+        # flip any reserved/active bookings from the previous service
+        # day to cancelled. The local seat pool has already been
+        # reset to total_capacity above so we explicitly do NOT
+        # increment for each cancellation -- the seat math is already
+        # correct. The BookingFirebaseListener also knows to skip
+        # increments for the STALE_REASON.
+        self.cancel_stale_bookings()
 
         # push the fresh baseline to Firebase so the dashboard and
         # mobile app see the reset immediately. firebase_sync is

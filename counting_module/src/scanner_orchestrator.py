@@ -749,9 +749,16 @@ class ScannerOrchestrator:
             shuttle_id=self.shuttle_id
         )
         service_day_firebase.initialize()
+        # Pass the bookings reference and shuttle_id so the manager
+        # can cancel any reserved/active bookings left over from
+        # the previous service day at the reset boundary. Without
+        # these, the stale-booking cleanup silently no-ops and
+        # yesterday's ghosts survive into today.
         service_day_manager = ServiceDayManager(
             db_path=self.db_path,
             firebase_sync=service_day_firebase,
+            bookings_ref=db.reference("bookings"),
+            shuttle_id=self.shuttle_id,
         )
         reset_date = service_day_manager.reset_if_needed()
         if reset_date:
