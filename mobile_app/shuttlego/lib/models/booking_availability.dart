@@ -3,6 +3,8 @@ class BookingAvailability {
     required this.reportedAvailableSeats,
     required this.occupiedSeats,
     required this.reservedSeats,
+    this.lastComputedAt,
+    this.isStale = false,
   });
 
   /// Physical seats reported as unoccupied by the shuttle/ML simulation.
@@ -32,4 +34,12 @@ class BookingAvailability {
   int get capacity => reportedAvailableSeats + occupiedSeats;
 
   bool get canBook => freeSeats > 0;
+
+  /// Milliseconds-since-epoch when this availability was computed locally.
+  /// When data is loaded from cache, this can be used to indicate staleness.
+  final int? lastComputedAt;
+
+  /// When true the availability was loaded from cache (connection lost)
+  /// and should be displayed as not recent.
+  final bool isStale;
 }

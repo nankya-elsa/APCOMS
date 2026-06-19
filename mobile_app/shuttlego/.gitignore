@@ -36,14 +36,17 @@ migrate_working_dir/
 # Local build-time secrets (Google Maps API key, etc.)
 dart_defines.json
 .env.json
+local.properties
 
 # Symbolication related
 app.*.symbols
 
 # Obfuscation related
 app.*.map.json
-
+apk_extracted
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile
 /android/app/release
+# Firebase Android config (keep out of source control)
+android/app/google-services.json
