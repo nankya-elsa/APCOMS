@@ -9,6 +9,10 @@ import '../models/shuttle_route.dart';
 import '../services/booking_service.dart';
 import '../utils/ticket_downloader.dart';
 import '../widgets/shuttle_location_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
+import '../services/shuttle_route_geometry_service.dart';
+import '../models/shuttle_route_geometry.dart';
+import '../services/device_location_service.dart';
 
 class BookingScreen extends StatefulWidget {
   const BookingScreen({
@@ -31,6 +35,9 @@ class _BookingScreenState extends State<BookingScreen> {
   int? _pickupIndex;
   int? _destinationIndex;
   bool _isSubmitting = false;
+  bool _useDeviceLocation = false;
+  int? _minutesToCurrentStop;
+  int? _minutesToPickup;
 
   late final BookingService _service = widget.service ?? BookingService();
 
@@ -77,9 +84,39 @@ class _BookingScreenState extends State<BookingScreen> {
 
           return Stack(
             children: [
-              ShuttleLocationMap(
-                shuttleKey: widget.trackedShuttleKey,
-                height: 380,
+              StreamBuilder<ShuttleRouteGeometry?>(
+                stream: ShuttleRouteGeometryService()
+                    .watchRoute(shuttleKey: widget.trackedShuttleKey),
+                builder: (context, routeSnap) {
+                  final route = routeSnap.data;
+                  gmaps.LatLng? pickupPoint;
+                  final pickupIndex = _pickupIndex;
+                  if (pickupIndex != null) {
+                    final stopName = ShuttleRoute.stops[pickupIndex];
+                    final stop = route?.findStopByName(stopName);
+                    if (stop != null) pickupPoint = gmaps.LatLng(stop.lat, stop.lng);
+                  }
+
+                  if (_useDeviceLocation) {
+                    return StreamBuilder<gmaps.LatLng?>(
+                      stream: DeviceLocationService().watchDeviceLocation(),
+                      builder: (context, deviceSnap) {
+                        final devicePoint = deviceSnap.data;
+                        return ShuttleLocationMap(
+                          shuttleKey: widget.trackedShuttleKey,
+                          height: 380,
+                          targetLocation: devicePoint ?? pickupPoint,
+                        );
+                      },
+                    );
+                  }
+
+                  return ShuttleLocationMap(
+                    shuttleKey: widget.trackedShuttleKey,
+                    height: 380,
+                    targetLocation: pickupPoint,
+                  );
+                },
               ),
               Align(
                 alignment: Alignment.bottomCenter,
@@ -100,6 +137,77 @@ class _BookingScreenState extends State<BookingScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (_minutesToCurrentStop != null || _minutesToPickup != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Row(
+                              children: [
+                                if (_minutesToCurrentStop != null)
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outlineVariant
+                                              .withValues(alpha: 0.22),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Bus ≈ ${_minutesToCurrentStop} min to current stop',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                    ),
+                                  ),
+                                if (_minutesToPickup != null) ...[
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outlineVariant
+                                              .withValues(alpha: 0.22),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Bus ≈ ${_minutesToPickup} min to your pickup',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            const Text('Use my location'),
+                            const SizedBox(width: 8),
+                            Switch(
+                              value: _useDeviceLocation,
+                              onChanged: (v) => setState(() => _useDeviceLocation = v),
+                            ),
+                          ],
+                        ),
                         _LabeledField(
                           label: 'Pick Up',
                           controller: _pickupController,
@@ -173,13 +281,18 @@ class _BookingScreenState extends State<BookingScreen> {
       return;
     }
 
+    final stops = ShuttleRoute.destinationChoicesForPickup(pickupIndex);
     final selected = await _pickStop(
       context,
-      stops: ShuttleRoute.destinationChoicesForPickup(pickupIndex),
+      stops: stops,
     );
     if (!mounted || selected == null) return;
 
-    final resolvedIndex = pickupIndex + 1 + selected;
+    // Map the selected stop name back to its absolute index in the master
+    // `ShuttleRoute.stops` list so we can store the canonical index.
+    final selectedStopName = stops[selected];
+    final resolvedIndex = ShuttleRoute.stops.indexOf(selectedStopName);
+    if (resolvedIndex < 0) return;
     setState(() {
       _destinationIndex = resolvedIndex;
       _destinationController.text = ShuttleRoute.stops[resolvedIndex];
@@ -219,7 +332,10 @@ class _BookingScreenState extends State<BookingScreen> {
       pickupIndex: pickupIndex,
       destinationIndex: destinationIndex,
     )) {
-      _showSnack(context, 'Destination must come after pickup.');
+      final msg = ShuttleRoute.isCircular
+          ? 'Destination must be different from pickup.'
+          : 'Destination must come after pickup.';
+      _showSnack(context, msg);
       return;
     }
 
@@ -293,9 +409,21 @@ class _BookingScreenState extends State<BookingScreen> {
   }
 
   static void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(
+          message,
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -365,7 +493,12 @@ class _BookingHistoryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final statusColor = booking.isActive ? scheme.primary : scheme.error;
+    final statusLower = booking.status.toLowerCase();
+    final statusColor = statusLower == 'reserved'
+        ? scheme.primary
+        : statusLower == 'active'
+            ? const Color(0xFFFFA726)
+            : scheme.error;
 
     return Container(
       padding: const EdgeInsets.all(12),

@@ -58,7 +58,6 @@ class MyBookingsScreen extends StatefulWidget {
 
 class _MyBookingsScreenState extends State<MyBookingsScreen> {
   late final BookingService _service = widget.service ?? BookingService();
-  Stream<List<BookingRecord>>? _bookingsStream;
 
   @override
   void initState() {
@@ -91,9 +90,9 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
           surfaceTintColor: Colors.white,
         ),
         body: StreamBuilder<List<BookingRecord>>(
-          stream: _bookingsStream ??= _service.watchUserBookings(
-            userUid: user.uid,
-          ),
+          // Request a fresh stream on every build so UI reflects recent
+          // changes (e.g. cancellations) immediately after returning.
+          stream: _service.watchUserBookings(userUid: user.uid),
           initialData: const <BookingRecord>[],
           builder: (context, snapshot) {
             final bookings = snapshot.data ?? const <BookingRecord>[];
@@ -290,9 +289,21 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
   }
 
   void _showSnack(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(
+          message,
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -366,7 +377,12 @@ class _BookingTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final statusColor = booking.isActive ? scheme.primary : scheme.error;
+    final statusLower = booking.status.toLowerCase();
+    final statusColor = statusLower == 'reserved'
+      ? scheme.primary
+      : statusLower == 'active'
+        ? const Color(0xFFFFA726)
+        : scheme.error;
     final created = booking.createdAt != null
         ? DateTime.fromMillisecondsSinceEpoch(booking.createdAt!).toLocal()
         : null;
@@ -374,9 +390,9 @@ class _BookingTile extends StatelessWidget {
     final timeText = created != null ? '${_formatTime(created, context)}' : '';
 
     // Map status to display label and colors to match the design
-    final statusLabel = booking.status.toLowerCase() == 'reserved'
-        ? 'ACTIVE'
-        : booking.status.toLowerCase() == 'completed'
+    final statusLabel = (statusLower == 'reserved' || statusLower == 'active')
+      ? 'ACTIVE'
+      : statusLower == 'completed'
         ? 'COMPLETED'
         : booking.status.toUpperCase();
 
@@ -385,12 +401,17 @@ class _BookingTile extends StatelessWidget {
     Color statusChipBg;
     Color statusChipText;
 
-    if (booking.status.toLowerCase() == 'reserved') {
+    if (statusLower == 'reserved') {
       tileIconColor = const Color(0xFF1E8E3E);
       tileBgColor = const Color(0xFFE9F6ED);
       statusChipBg = const Color(0xFFECF8F0);
       statusChipText = const Color(0xFF1E8E3E);
-    } else if (booking.status.toLowerCase() == 'completed') {
+    } else if (statusLower == 'active') {
+      tileIconColor = const Color(0xFFFF8A00);
+      tileBgColor = const Color(0xFFFFF3E0);
+      statusChipBg = const Color(0xFFFFF7ED);
+      statusChipText = const Color(0xFFFF8A00);
+    } else if (statusLower == 'completed') {
       tileIconColor = const Color(0xFF6B7280);
       tileBgColor = const Color(0xFFF3F4F6);
       statusChipBg = const Color(0xFFF8FAFC);
@@ -563,9 +584,14 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     try {
-      final scheme = Theme.of(context).colorScheme;
-      final receipt = _receiptFromBooking(booking);
-      final statusColor = booking.isActive ? scheme.primary : scheme.error;
+        final scheme = Theme.of(context).colorScheme;
+        final receipt = _receiptFromBooking(booking);
+        final statusLower = booking.status.toLowerCase();
+        final statusColor = statusLower == 'reserved'
+          ? scheme.primary
+          : statusLower == 'active'
+            ? const Color(0xFFFFA726)
+            : scheme.error;
 
       return Scaffold(
         backgroundColor: Colors.white,

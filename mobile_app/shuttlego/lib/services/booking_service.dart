@@ -3,7 +3,11 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'package:firebase_database/firebase_database.dart';
+import 'database_adapter.dart';
 
 import '../models/booking_availability.dart';
 import '../models/booking_record.dart';
@@ -19,62 +23,117 @@ class BookingException implements Exception {
 }
 
 class BookingService {
-  BookingService({FirebaseDatabase? database})
-    : _database = database ?? FirebaseDatabase.instance;
+  BookingService({FirebaseDatabase? database, DatabaseAdapter? adapter})
+    : _databaseAdapter = adapter ?? FirebaseDatabaseAdapter(database ?? FirebaseDatabase.instance);
 
-  final FirebaseDatabase _database;
+  final DatabaseAdapter _databaseAdapter;
 
-  Stream<BookingAvailability> watchAvailability({required String shuttleKey}) {
-    final controller = StreamController<BookingAvailability>();
-    final shuttleRef = _database.ref().child('shuttles').child(shuttleKey);
-    final bookingsRef = _database.ref().child('bookings');
+  Stream<BookingAvailability> watchAvailability({required String shuttleKey, bool persistDerived = false}) {
+    final controller = StreamController<BookingAvailability>.broadcast();
+    final shuttlePath = 'shuttles/$shuttleKey';
+    final bookingsPath = 'bookings';
 
     Map<String, Object?> shuttleData = const <String, Object?>{};
     var activeReservations = 0;
     var hasShuttleData = false;
 
+    StreamSubscription? shuttleSub;
+    StreamSubscription? bookingsSub;
+
     void emitIfReady() {
       if (!hasShuttleData || controller.isClosed) return;
 
-      controller.add(
-        BookingAvailability(
-          reportedAvailableSeats: _readInt(shuttleData['available_seats']),
-          occupiedSeats: _readInt(shuttleData['current_count']),
-          reservedSeats: activeReservations,
-        ),
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final availability = BookingAvailability(
+        reportedAvailableSeats: _readInt(shuttleData['available_seats']),
+        occupiedSeats: _readInt(shuttleData['current_count']),
+        reservedSeats: activeReservations,
+        lastComputedAt: now,
+        isStale: false,
       );
+
+      controller.add(availability);
+
+      // Persist a local cached copy so the UI can show stale data if
+      // connectivity to the database is lost.
+      unawaited(_cacheAvailability(shuttleKey, availability));
+
+      if (persistDerived) {
+        try {
+          _databaseAdapter.update(<String, Object?>{
+            '$shuttlePath/derived/reported_available_seats': availability.reportedAvailableSeats,
+            '$shuttlePath/derived/occupied_seats': availability.occupiedSeats,
+            '$shuttlePath/derived/reserved_seats': availability.reservedSeats,
+            '$shuttlePath/derived/free_seats': availability.freeSeats,
+            '$shuttlePath/derived/capacity': availability.capacity,
+            '$shuttlePath/derived/last_computed_at': ServerValue.timestamp,
+          }).catchError((error, stack) {
+            if (!controller.isClosed) controller.addError(error);
+          });
+        } catch (e) {
+          if (!controller.isClosed) controller.addError(e);
+        }
+      }
     }
 
-    final shuttleSub = shuttleRef.onValue.listen((event) {
-      final raw = event.snapshot.value;
-      shuttleData = raw is Map
-          ? Map<String, Object?>.from(raw)
-          : const <String, Object?>{};
-      hasShuttleData = true;
-      emitIfReady();
-    }, onError: controller.addError);
+    // Subscribe to real-time updates if adapter supports it (default
+    // DatabaseAdapter provides a single-shot stream but Firebase adapter
+    // overrides to return onValue streams).
+    try {
+      shuttleSub = _databaseAdapter.onValue(shuttlePath).listen((raw) {
+        shuttleData = raw is Map ? Map<String, Object?>.from(raw as Map) : const <String, Object?>{};
+        hasShuttleData = true;
+        emitIfReady();
+      }, onError: (_) async {
+        // On error, try to load cached availability
+        final cached = await _loadCachedAvailability(shuttleKey);
+        if (cached != null && !controller.isClosed) controller.add(cached);
+      });
 
-    final bookingsSub = bookingsRef
-        .orderByChild('shuttle_key')
-        .equalTo(shuttleKey)
-        .onValue
-        .listen(
-          (event) {
-            activeReservations = _countActiveReservations(event.snapshot.value);
-            emitIfReady();
-          },
-          onError: (Object error, StackTrace stackTrace) {
-            // Keep shuttle availability visible even if booking reads are
-            // temporarily blocked. Creating/cancelling still reports its own
-            // database errors when the user acts.
-            activeReservations = 0;
-            emitIfReady();
-          },
-        );
+      bookingsSub = _databaseAdapter.queryOnValue(bookingsPath, orderByChild: 'shuttle_key', equalTo: shuttleKey).listen((val) {
+        activeReservations = _countActiveReservations(val);
+        emitIfReady();
+      }, onError: (_) {
+        activeReservations = 0;
+        // emit whatever shuttle data we have (cached or fresh)
+        _loadCachedAvailability(shuttleKey).then((cached) {
+          if (cached != null && !controller.isClosed) controller.add(cached);
+          else emitIfReady();
+        }).catchError((_) => emitIfReady());
+      });
+    } catch (e) {
+      // Fallback to single-shot reads if streaming is not available.
+      _databaseAdapter.get(shuttlePath).then((raw) {
+        shuttleData = raw is Map ? Map<String, Object?>.from(raw as Map) : const <String, Object?>{};
+        hasShuttleData = true;
+        _databaseAdapter.queryGet(bookingsPath, orderByChild: 'shuttle_key', equalTo: shuttleKey).then((val) {
+          activeReservations = _countActiveReservations(val);
+          emitIfReady();
+        }).catchError((_) {
+          activeReservations = 0;
+          _loadCachedAvailability(shuttleKey).then((cached) {
+            if (cached != null && !controller.isClosed) {
+              controller.add(cached);
+            } else {
+              emitIfReady();
+            }
+          }).catchError((_) => emitIfReady());
+        });
+      }).catchError((Object error, StackTrace stack) {
+        if (!controller.isClosed) {
+          _loadCachedAvailability(shuttleKey).then((cached) {
+            if (cached != null && !controller.isClosed) {
+              controller.add(cached);
+            }
+          }).catchError((_) {});
+        }
+      });
+    }
 
     controller.onCancel = () async {
-      await shuttleSub.cancel();
-      await bookingsSub.cancel();
+      await shuttleSub?.cancel();
+      await bookingsSub?.cancel();
+      await controller.close();
     };
 
     return controller.stream;
@@ -118,27 +177,68 @@ class BookingService {
       throw BookingException('Missing booking data in QR');
     }
 
-    final snap = await _database.ref().child('bookings').child(bookingId).get();
-    final data = snap.value;
+    final data = await _databaseAdapter.get('bookings/$bookingId');
     if (data is! Map) throw BookingException('Booking not found');
     final db = Map<String, Object?>.from(data);
 
     final storedToken = db['qr_token'] as String?;
-    final status = ((db['status'] as String?) ?? '').trim().toLowerCase();
-    if (status != 'reserved') throw BookingException('Booking not active');
+    var status = ((db['status'] as String?) ?? '').trim().toLowerCase();
     if (storedToken == null || storedToken != token) {
       throw BookingException('Invalid QR token');
     }
 
     final userUid = db['user_uid'] as String?;
-    await _database.ref().update(<String, Object?>{
-      'bookings/$bookingId/status': 'completed',
-      'bookings/$bookingId/completed_at': ServerValue.timestamp,
-      if (userUid != null)
-        'user_bookings/$userUid/$bookingId/status': 'completed',
-      if (userUid != null)
-        'user_bookings/$userUid/$bookingId/completed_at': ServerValue.timestamp,
-    });
+
+    // If the booking is still reserved, the first scan marks it active
+    // (journey started). If it's already active, a subsequent scan marks
+    // it completed (journey finished). This makes the operation
+    // idempotent and supports both start/finish flows.
+    if (status == 'reserved') {
+      status = 'active';
+        await _databaseAdapter.update(<String, Object?>{
+          'bookings/$bookingId/status': 'active',
+          'bookings/$bookingId/started_at': ServerValue.timestamp,
+          if (userUid != null) 'user_bookings/$userUid/$bookingId/status': 'active',
+          if (userUid != null) 'user_bookings/$userUid/$bookingId/started_at': ServerValue.timestamp,
+        });
+      // Update derived availability for this shuttle so reservation changes
+      // are recorded.
+      try {
+        final shuttleKey = db['shuttle_key'] as String?;
+        if (shuttleKey != null && shuttleKey.trim().isNotEmpty) {
+          _writeDerivedAvailability(shuttleKey);
+        }
+      } catch (_) {}
+      return;
+    }
+
+    if (status == 'active') {
+      // Complete the booking
+      await _databaseAdapter.update(<String, Object?>{
+        'bookings/$bookingId/status': 'completed',
+        'bookings/$bookingId/completed_at': ServerValue.timestamp,
+        if (userUid != null) 'user_bookings/$userUid/$bookingId/status': 'completed',
+        if (userUid != null) 'user_bookings/$userUid/$bookingId/completed_at': ServerValue.timestamp,
+      });
+      try {
+        final shuttleKey = db['shuttle_key'] as String?;
+        if (shuttleKey != null && shuttleKey.trim().isNotEmpty) {
+          _writeDerivedAvailability(shuttleKey);
+        }
+      } catch (_) {}
+      return;
+    }
+
+    // Any other status is not valid for a scan operation.
+    throw BookingException('Booking not active');
+    // Update derived availability for this shuttle so reservation changes
+    // are recorded in the dedicated table for auditing and queries.
+    try {
+      final shuttleKey = db['shuttle_key'] as String?;
+      if (shuttleKey != null && shuttleKey.trim().isNotEmpty) {
+        _writeDerivedAvailability(shuttleKey);
+      }
+    } catch (_) {}
   }
 
   static int _countActiveReservations(Object? raw) {
@@ -156,58 +256,53 @@ class BookingService {
   }
 
   Stream<List<BookingRecord>> watchUserBookings({required String userUid}) {
-    final ref = _database.ref().child('user_bookings').child(userUid);
-
-    // Make the controller broadcast-capable so multiple listeners (debug
-    // subscribers + UI) won't compete for a single-subscription stream.
     final controller = StreamController<List<BookingRecord>>.broadcast();
-    String? lastSnapshotStr;
+    StreamSubscription? sub;
 
-    final sub = ref.onValue.listen((event) {
-      final raw = event.snapshot.value;
-      final snapshotStr = raw?.toString() ?? 'null';
-      // De-duplicate identical consecutive snapshots to avoid rapid rebuilds
-      if (snapshotStr == lastSnapshotStr) return;
-      lastSnapshotStr = snapshotStr;
-
+    void processRaw(Object? raw) {
       // Defensive handling: sometimes snapshots can be List or Map depending
       // on how data was written. Normalize to a Map<String, Object?>.
       Map<String, Object?> rawMap;
       if (raw is Map) {
-        rawMap = Map<String, Object?>.from(raw);
+        rawMap = Map<String, Object?>.from(raw as Map);
       } else if (raw is List) {
         rawMap = <String, Object?>{};
-        for (var i = 0; i < raw.length; i++) {
+        for (var i = 0; i < (raw as List).length; i++) {
           final v = raw[i];
           if (v != null) rawMap[i.toString()] = v;
         }
       } else {
-        controller.add(const <BookingRecord>[]);
+        if (!controller.isClosed) controller.add(const <BookingRecord>[]);
         return;
       }
 
       final bookings = <BookingRecord>[];
-      var parseNullCount = 0;
       for (final entry in rawMap.entries) {
         final value = entry.value;
         if (value is! Map) continue;
-
         final map = Map<String, Object?>.from(value);
         map.putIfAbsent('booking_id', () => entry.key.toString());
         final booking = BookingRecord.fromMap(map);
-        if (booking != null) {
-          bookings.add(booking);
-        } else {
-          parseNullCount++;
-        }
+        if (booking != null) bookings.add(booking);
       }
 
       bookings.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
-      controller.add(bookings);
-    }, onError: controller.addError);
+      if (!controller.isClosed) controller.add(bookings);
+    }
+
+    try {
+      sub = _databaseAdapter.onValue('user_bookings/$userUid').listen((raw) {
+        processRaw(raw);
+      }, onError: (e) => controller.addError(e));
+    } catch (e) {
+      // Fallback to single-shot read
+      _databaseAdapter.get('user_bookings/$userUid').then((raw) {
+        processRaw(raw);
+      }).catchError((e) => controller.addError(e));
+    }
 
     controller.onCancel = () async {
-      await sub.cancel();
+      await sub?.cancel();
       await controller.close();
     };
 
@@ -231,20 +326,17 @@ class BookingService {
       );
     }
 
-    final shuttleRef = _database.ref().child('shuttles').child(shuttleKey);
-    final bookingsRef = _database.ref().child('bookings');
-    final bookingKey = bookingsRef.push().key;
+    final bookingKey = await _databaseAdapter.pushKey('bookings');
     if (bookingKey == null || bookingKey.trim().isEmpty) {
       throw BookingException('Failed to allocate a booking id.');
     }
 
-    final shuttleSnapshot = await shuttleRef.get();
-    final shuttleRaw = shuttleSnapshot.value;
-    final shuttleData = shuttleRaw is Map
-        ? Map<String, Object?>.from(shuttleRaw)
-        : const <String, Object?>{};
-    final availableSeats = _readInt(shuttleData['available_seats']);
-    if (availableSeats <= 0) {
+    final shuttleRaw = await _databaseAdapter.get('shuttles/$shuttleKey');
+    final shuttleData = shuttleRaw is Map ? Map<String, Object?>.from(shuttleRaw as Map) : const <String, Object?>{};
+    final cameraAvailableSeats = _readInt(shuttleData['available_seats']);
+    final reservedSeats = await _fetchActiveReservationCount(shuttleKey);
+    final bookableSeats = cameraAvailableSeats - reservedSeats;
+    if (bookableSeats <= 0) {
       throw BookingException('No free seats available for this shuttle.');
     }
 
@@ -270,7 +362,7 @@ class BookingService {
       'created_at': ServerValue.timestamp,
     };
 
-    await _database.ref().update(<String, Object?>{
+    await _databaseAdapter.update(<String, Object?>{
       'bookings/$bookingKey': bookingData,
       'user_bookings/$userUid/$bookingKey': bookingData,
     });
@@ -355,7 +447,14 @@ class BookingService {
       };
     }
 
-    await _database.ref().update(updates);
+    await _databaseAdapter.update(updates);
+    // After cancelling, update derived availability for the shuttle.
+    try {
+      final shuttleKey = booking.shuttleKey;
+      if (shuttleKey.trim().isNotEmpty) {
+        _writeDerivedAvailability(shuttleKey);
+      }
+    } catch (_) {}
   }
 
   /// Permanently delete a past booking from both the global `bookings`
@@ -365,7 +464,7 @@ class BookingService {
       throw BookingException('Only past bookings can be deleted.');
     }
 
-    await _database.ref().update(<String, Object?>{
+    await _databaseAdapter.update(<String, Object?>{
       'bookings/${booking.bookingId}': null,
       'user_bookings/${booking.userUid}/${booking.bookingId}': null,
     });
@@ -375,30 +474,71 @@ class BookingService {
   /// `user_bookings`. If `userUid` is provided only that user's bookings are
   /// processed; otherwise all users are scanned. Returns the number of
   /// booking entries created or updated.
+  
+
+  Future<int> _fetchActiveReservationCount(String shuttleKey) async {
+    final val = await _databaseAdapter.queryGet('bookings', orderByChild: 'shuttle_key', equalTo: shuttleKey);
+    return _countActiveReservations(val);
+  }
+
+  /// Compute derived availability and persist it in a dedicated top-level
+  /// path so other services can query it easily. This is triggered after
+  /// booking create/cancel/complete operations which change reserved seats.
+  Future<void> _writeDerivedAvailability(String shuttleKey) async {
+    try {
+      final raw = await _databaseAdapter.get('shuttles/$shuttleKey');
+      final shuttleData = raw is Map ? Map<String, Object?>.from(raw as Map) : <String, Object?>{};
+
+      final reportedAvailableSeats = _readInt(shuttleData['available_seats']);
+      final occupiedSeats = _readInt(shuttleData['current_count']);
+      final reservedSeats = await _fetchActiveReservationCount(shuttleKey);
+
+      final availability = BookingAvailability(
+        reportedAvailableSeats: reportedAvailableSeats,
+        occupiedSeats: occupiedSeats,
+        reservedSeats: reservedSeats,
+      );
+
+      await _databaseAdapter.update(<String, Object?>{
+        'derived_availability/$shuttleKey/reported_available_seats': availability.reportedAvailableSeats,
+        'derived_availability/$shuttleKey/occupied_seats': availability.occupiedSeats,
+        'derived_availability/$shuttleKey/reserved_seats': availability.reservedSeats,
+        'derived_availability/$shuttleKey/free_seats': availability.freeSeats,
+        'derived_availability/$shuttleKey/capacity': availability.capacity,
+        'derived_availability/$shuttleKey/last_computed_at': ServerValue.timestamp,
+      });
+    } catch (_) {
+      // Best-effort; don't let persistence failures block the booking flow.
+    }
+  }
 
   Future<bool> _hasActiveUserBooking(String userUid) async {
     // Query the user's bookings for any entry with status == 'reserved'.
     try {
-      final snapshot = await _database
-          .ref()
-          .child('user_bookings')
-          .child(userUid)
-          .orderByChild('status')
-          .equalTo('reserved')
-          .get();
+      final raw = await _databaseAdapter.get('user_bookings/$userUid');
+      if (raw == null) return false;
 
-      final val = snapshot.value;
-      if (val == null) return false;
-      if (val is Map) return _countActiveReservations(val) > 0;
-      if (val is List) {
-        for (final v in val) {
-          if (v is Map) {
-            final status = ((v['status'] as String?) ?? '')
-                .trim()
-                .toLowerCase();
-            if (status == 'reserved') return true;
-          }
+      if (raw is Map) {
+        for (final v in raw.values) {
+          if (v is! Map) continue;
+          final map = Map<String, Object?>.from(v);
+          final status = ((map['status'] as String?) ?? '')
+              .trim()
+              .toLowerCase();
+          if (status == 'reserved' || status == 'active') return true;
         }
+        return false;
+      }
+
+      if (raw is List) {
+        for (final v in raw) {
+          if (v is! Map) continue;
+          final status = ((v['status'] as String?) ?? '')
+              .trim()
+              .toLowerCase();
+          if (status == 'reserved' || status == 'active') return true;
+        }
+        return false;
       }
     } catch (_) {
       // On error, be conservative and assume no active booking so callers
@@ -414,5 +554,44 @@ class BookingService {
     if (value is double) return value.round();
     if (value is String) return int.tryParse(value) ?? 0;
     return 0;
+  }
+
+  Future<void> _cacheAvailability(String shuttleKey, BookingAvailability availability) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(p.join(dir.path, 'availability_${shuttleKey}.json'));
+      final map = <String, Object?>{
+        'reportedAvailableSeats': availability.reportedAvailableSeats,
+        'occupiedSeats': availability.occupiedSeats,
+        'reservedSeats': availability.reservedSeats,
+        'lastComputedAt': availability.lastComputedAt,
+      };
+      await file.writeAsString(jsonEncode(map));
+    } catch (_) {
+      // Best-effort caching; ignore failures.
+    }
+  }
+
+  Future<BookingAvailability?> _loadCachedAvailability(String shuttleKey) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(p.join(dir.path, 'availability_${shuttleKey}.json'));
+      if (!await file.exists()) return null;
+      final txt = await file.readAsString();
+      final raw = jsonDecode(txt) as Map<String, dynamic>;
+      final reported = (raw['reportedAvailableSeats'] as num?)?.toInt() ?? 0;
+      final occupied = (raw['occupiedSeats'] as num?)?.toInt() ?? 0;
+      final reserved = (raw['reservedSeats'] as num?)?.toInt() ?? 0;
+      final last = (raw['lastComputedAt'] as num?)?.toInt();
+      return BookingAvailability(
+        reportedAvailableSeats: reported,
+        occupiedSeats: occupied,
+        reservedSeats: reserved,
+        lastComputedAt: last,
+        isStale: true,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }

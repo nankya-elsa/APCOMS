@@ -29,7 +29,12 @@ class BookingRecord {
   final int? cancelledAt;
   final String? cancelReason;
 
-  bool get isActive => status == 'reserved';
+  // Consider both 'reserved' (booked) and 'active' (scanned for boarding)
+  // as active bookings for UI and cancellation logic.
+  bool get isActive {
+    final s = status.trim().toLowerCase();
+    return s == 'reserved' || s == 'active';
+  }
 
   static BookingRecord? fromMap(Map<String, Object?> map) {
     final bookingId = (map['booking_id'] as String?)?.trim();

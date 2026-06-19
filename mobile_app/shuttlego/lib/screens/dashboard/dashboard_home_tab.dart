@@ -44,11 +44,10 @@ class DashboardHomeTab extends StatelessWidget {
                 constraints: BoxConstraints(minHeight: constraints.maxHeight),
                 child: IntrinsicHeight(
                   child: Padding(
-                    // Add a bit more top spacing so greeting isn't flush to the
-                    // top edge, without pushing the booking card to the bottom.
-                    padding: const EdgeInsets.fromLTRB(16, 36, 16, 16),
+                    // Reduced top spacing so content starts closer to top.
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisAlignment: MainAxisAlignment.start,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Row(
@@ -188,7 +187,7 @@ class _ShuttleCard extends StatelessWidget {
         .child(trackedShuttleKey);
 
     return StreamBuilder<BookingAvailability>(
-      stream: BookingService().watchAvailability(shuttleKey: trackedShuttleKey),
+      stream: BookingService().watchAvailability(shuttleKey: trackedShuttleKey, persistDerived: false),
       builder: (context, availabilitySnapshot) {
         final availability = availabilitySnapshot.data;
 
@@ -289,6 +288,8 @@ class _ShuttleCard extends StatelessWidget {
                     fit: BoxFit.contain,
                   ),
                   const Spacer(),
+                  if (availability != null)
+                    _StalenessPill(availability: availability),
                 ],
               ),
               const SizedBox(height: 10),
@@ -455,6 +456,54 @@ class _StatBox extends StatelessWidget {
               color: foreground.withValues(alpha: 0.9),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StalenessPill extends StatelessWidget {
+  const _StalenessPill({required this.availability});
+
+  final BookingAvailability availability;
+
+  String _fmt(int? ms) {
+    if (ms == null) return 'unknown';
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (availability.isStale) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: Color.alphaBlend(scheme.errorContainer.withValues(alpha: 0.12), Colors.white),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: scheme.error.withValues(alpha: 0.12)),
+        ),
+        child: Text('Stale • updated ${_fmt(availability.lastComputedAt)}',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.error)),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(scheme.primaryContainer.withValues(alpha: 0.12), Colors.white),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.wifi, size: 14, color: scheme.primary),
+          const SizedBox(width: 6),
+          Text('Live', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.primary)),
         ],
       ),
     );

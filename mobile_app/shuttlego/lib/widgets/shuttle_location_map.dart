@@ -19,12 +19,14 @@ class ShuttleLocationMap extends StatelessWidget {
     this.height = 260,
     this.locationService,
     this.routeService,
+    this.targetLocation,
   });
 
   final String shuttleKey;
   final double height;
   final ShuttleLocationService? locationService;
   final ShuttleRouteGeometryService? routeService;
+  final gmaps.LatLng? targetLocation;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +156,17 @@ class ShuttleLocationMap extends StatelessWidget {
                             ? null
                             : gmaps.LatLng(nextStopStop.lat, nextStopStop.lng);
 
+                        final currentStopStop = currentStopName.isEmpty
+                            ? null
+                            : (route?.findStopByName(currentStopName) ??
+                                  _findStopByNameInList(
+                                    catalogStops,
+                                    currentStopName,
+                                  ));
+                        final currentStopPoint = currentStopStop == null
+                            ? null
+                            : gmaps.LatLng(currentStopStop.lat, currentStopStop.lng);
+
                         final center =
                             busPoint ??
                             (polyline.isNotEmpty
@@ -168,12 +181,12 @@ class ShuttleLocationMap extends StatelessWidget {
                             .map((p) => gmaps.LatLng(p.latitude, p.longitude))
                             .toList(growable: false);
 
-                        final highlightedPoints =
-                            _computeHighlightedRoutePoints(
-                              route: route,
-                              busPoint: busPoint,
-                              nextStopPoint: nextStopPoint,
-                            );
+                        final highlightedOrigin = busPoint ?? currentStopPoint;
+                        final highlightedPoints = _computeHighlightedRoutePoints(
+                          route: route,
+                          busPoint: highlightedOrigin,
+                          nextStopPoint: nextStopPoint,
+                        );
 
                         final polylines = <gmaps.Polyline>{
                           if (routePoints.isNotEmpty)
@@ -251,17 +264,18 @@ class ShuttleLocationMap extends StatelessWidget {
                                         'next_stop',
                                       ),
                                       position: nextStopPoint,
-                                      icon:
-                                          gmaps
-                                              .BitmapDescriptor.defaultMarkerWithHue(
-                                            gmaps.BitmapDescriptor.hueGreen,
-                                          ),
+                                      icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                                        gmaps.BitmapDescriptor.hueGreen,
+                                      ),
                                       infoWindow: gmaps.InfoWindow(
                                         title: 'Next stop',
                                         snippet: nextStopName,
                                       ),
                                     ),
                                 };
+
+                                  // Remove the confusing blue "current stop" marker
+                                  // — the bus marker and next-stop marker are sufficient.
 
                                 if (kIsWeb) {
                                   return FutureBuilder<void>(
@@ -383,6 +397,68 @@ class ShuttleLocationMap extends StatelessWidget {
                                         ),
                                   ),
                                 ),
+                              ),
+                            if (targetLocation != null && busPoint != null)
+                              Positioned(
+                                right: 10,
+                                top: 10,
+                                child: Builder(builder: (context) {
+                                  try {
+                                    double meters;
+                                    // Prefer along-route distance when polyline is available.
+                                    final polyline = route?.polyline ?? const <ll.LatLng>[];
+                                    if (polyline.isNotEmpty) {
+                                        final startIdx = _closestPolylineIndex(polyline, busPoint!);
+                                        final endIdx = _closestPolylineIndex(polyline,
+                                          gmaps.LatLng(targetLocation!.latitude, targetLocation!.longitude));
+                                      if (startIdx != null && endIdx != null) {
+                                        meters = _distanceAlongPolylineMeters(polyline, startIdx, endIdx);
+                                      } else {
+                                        meters = ll.Distance().as(
+                                          ll.LengthUnit.Meter,
+                                          ll.LatLng(busPoint!.latitude, busPoint!.longitude),
+                                          ll.LatLng(targetLocation!.latitude, targetLocation!.longitude),
+                                        );
+                                      }
+                                    } else {
+                                      meters = ll.Distance().as(
+                                        ll.LengthUnit.Meter,
+                                        ll.LatLng(busPoint!.latitude, busPoint!.longitude),
+                                        ll.LatLng(targetLocation!.latitude, targetLocation!.longitude),
+                                      );
+                                    }
+                                    const speedMps = 8.0; // ~28.8 km/h estimate
+                                    final mins = (meters / speedMps / 60).ceil();
+
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Color.alphaBlend(
+                                          scheme.surface.withValues(alpha: 0.92),
+                                          Colors.white,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: scheme.outlineVariant.withValues(
+                                            alpha: 0.35,
+                                          ),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Bus ≈ ${mins} min',
+                                        style: Theme.of(context).textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: scheme.onSurfaceVariant,
+                                            ),
+                                      ),
+                                    );
+                                  } catch (_) {
+                                    return const SizedBox.shrink();
+                                  }
+                                }),
                               ),
                             if (hasErrors)
                               Positioned(
@@ -685,4 +761,32 @@ int? _closestPolylineIndex(List<ll.LatLng> polyline, gmaps.LatLng target) {
   }
 
   return bestIdx;
+}
+
+double _distanceAlongPolylineMeters(List<ll.LatLng> polyline, int startIdx, int endIdx) {
+  final dist = ll.Distance();
+  double sum = 0.0;
+  if (polyline.isEmpty) return 0.0;
+
+  if (startIdx <= endIdx) {
+    for (var i = startIdx; i < endIdx; i++) {
+      final a = polyline[i];
+      final b = polyline[i + 1];
+      sum += dist(ll.LatLng(a.latitude, a.longitude), ll.LatLng(b.latitude, b.longitude));
+    }
+  } else {
+    // wrap-around route
+    for (var i = startIdx; i < polyline.length - 1; i++) {
+      final a = polyline[i];
+      final b = polyline[i + 1];
+      sum += dist(ll.LatLng(a.latitude, a.longitude), ll.LatLng(b.latitude, b.longitude));
+    }
+    for (var i = 0; i < endIdx; i++) {
+      final a = polyline[i];
+      final b = polyline[i + 1];
+      sum += dist(ll.LatLng(a.latitude, a.longitude), ll.LatLng(b.latitude, b.longitude));
+    }
+  }
+
+  return sum;
 }

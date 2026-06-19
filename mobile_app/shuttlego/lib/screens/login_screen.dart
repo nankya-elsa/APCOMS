@@ -20,6 +20,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _obscurePassword = true;
   bool _isSubmitting = false;
+  int _failedAttempts = 0;
+  DateTime? _lockoutUntil;
+  static const _maxAttempts = 5;
+  static const _lockoutSeconds = 60;
 
   @override
   void dispose() {
@@ -59,6 +63,22 @@ class _LoginScreenState extends State<LoginScreen> {
     final isValid = _formKey.currentState?.validate() ?? false;
     if (!isValid) return;
 
+    final now = DateTime.now();
+    if (_lockoutUntil != null && now.isBefore(_lockoutUntil!)) {
+      final remain = _lockoutUntil!.difference(now).inSeconds;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Too many attempts'),
+          content: Text('Too many failed login attempts. Try again in ${remain}s.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSubmitting = true);
     try {
       await const AuthService().signInWithEmailAndPassword(
@@ -67,12 +87,26 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (!mounted) return;
+      // Reset failed attempts on successful login
+      _failedAttempts = 0;
+      _lockoutUntil = null;
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on Exception catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_friendlyErrorMessage(e))));
+      // Increment failed attempts and trigger lockout if limit reached.
+      _failedAttempts++;
+      if (_failedAttempts >= _maxAttempts) {
+        _lockoutUntil = DateTime.now().add(const Duration(seconds: _lockoutSeconds));
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          content: Text(_friendlyErrorMessage(e), textAlign: TextAlign.center),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+          ],
+        ),
+      );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
