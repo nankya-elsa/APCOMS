@@ -195,12 +195,12 @@ class BookingService {
     // idempotent and supports both start/finish flows.
     if (status == 'reserved') {
       status = 'active';
-        await _databaseAdapter.update(<String, Object?>{
-          'bookings/$bookingId/status': 'active',
-          'bookings/$bookingId/started_at': ServerValue.timestamp,
-          if (userUid != null) 'user_bookings/$userUid/$bookingId/status': 'active',
-          if (userUid != null) 'user_bookings/$userUid/$bookingId/started_at': ServerValue.timestamp,
-        });
+      await _databaseAdapter.update(<String, Object?>{
+        'bookings/$bookingId/status': 'active',
+        'bookings/$bookingId/started_at': ServerValue.timestamp,
+        if (userUid != null) 'user_bookings/$userUid/$bookingId/status': 'active',
+        if (userUid != null) 'user_bookings/$userUid/$bookingId/started_at': ServerValue.timestamp,
+      });
       // Update derived availability for this shuttle so reservation changes
       // are recorded.
       try {
@@ -231,14 +231,6 @@ class BookingService {
 
     // Any other status is not valid for a scan operation.
     throw BookingException('Booking not active');
-    // Update derived availability for this shuttle so reservation changes
-    // are recorded in the dedicated table for auditing and queries.
-    try {
-      final shuttleKey = db['shuttle_key'] as String?;
-      if (shuttleKey != null && shuttleKey.trim().isNotEmpty) {
-        _writeDerivedAvailability(shuttleKey);
-      }
-    } catch (_) {}
   }
 
   static int _countActiveReservations(Object? raw) {
@@ -332,7 +324,9 @@ class BookingService {
     }
 
     final shuttleRaw = await _databaseAdapter.get('shuttles/$shuttleKey');
-    final shuttleData = shuttleRaw is Map ? Map<String, Object?>.from(shuttleRaw as Map) : const <String, Object?>{};
+    final shuttleData = shuttleRaw is Map
+        ? Map<String, Object?>.from(shuttleRaw as Map)
+        : const <String, Object?>{};
     final cameraAvailableSeats = _readInt(shuttleData['available_seats']);
     final reservedSeats = await _fetchActiveReservationCount(shuttleKey);
     final bookableSeats = cameraAvailableSeats - reservedSeats;
@@ -394,18 +388,14 @@ class BookingService {
         reason.trim().isEmpty ? 'Cancelled by user' : reason.trim();
 
     final updates = <String, Object?>{
-      'user_bookings/${booking.userUid}/${booking.bookingId}/status':
-          'cancelled',
-      'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason':
-          effectiveReason,
-      'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at':
-          ServerValue.timestamp,
+      'user_bookings/${booking.userUid}/${booking.bookingId}/status': 'cancelled',
+      'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason': effectiveReason,
+      'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at': ServerValue.timestamp,
     };
 
-    final bookingRef = _database.ref().child('bookings').child(booking.bookingId);
     try {
-      final snap = await bookingRef.get();
-      if (snap.value == null) {
+      final snap = await _databaseAdapter.get('bookings/${booking.bookingId}');
+      if (snap == null) {
         // Global booking entry missing — create a minimal cancelled record so
         // the system remains consistent and the user can re-book.
         final minimal = <String, Object?>{
@@ -425,8 +415,7 @@ class BookingService {
       } else {
         updates['bookings/${booking.bookingId}/status'] = 'cancelled';
         updates['bookings/${booking.bookingId}/cancel_reason'] = effectiveReason;
-        updates['bookings/${booking.bookingId}/cancelled_at'] =
-            ServerValue.timestamp;
+        updates['bookings/${booking.bookingId}/cancelled_at'] = ServerValue.timestamp;
       }
     } catch (_) {
       // If reading the global booking fails for any reason, still ensure the
@@ -470,14 +459,12 @@ class BookingService {
     });
   }
 
-  /// Recover missing `bookings/$bookingId` entries by copying data from
-  /// `user_bookings`. If `userUid` is provided only that user's bookings are
-  /// processed; otherwise all users are scanned. Returns the number of
-  /// booking entries created or updated.
-  
-
   Future<int> _fetchActiveReservationCount(String shuttleKey) async {
-    final val = await _databaseAdapter.queryGet('bookings', orderByChild: 'shuttle_key', equalTo: shuttleKey);
+    final val = await _databaseAdapter.queryGet(
+      'bookings',
+      orderByChild: 'shuttle_key',
+      equalTo: shuttleKey,
+    );
     return _countActiveReservations(val);
   }
 
@@ -487,7 +474,9 @@ class BookingService {
   Future<void> _writeDerivedAvailability(String shuttleKey) async {
     try {
       final raw = await _databaseAdapter.get('shuttles/$shuttleKey');
-      final shuttleData = raw is Map ? Map<String, Object?>.from(raw as Map) : <String, Object?>{};
+      final shuttleData = raw is Map
+          ? Map<String, Object?>.from(raw as Map)
+          : <String, Object?>{};
 
       final reportedAvailableSeats = _readInt(shuttleData['available_seats']);
       final occupiedSeats = _readInt(shuttleData['current_count']);
@@ -513,7 +502,6 @@ class BookingService {
   }
 
   Future<bool> _hasActiveUserBooking(String userUid) async {
-    // Query the user's bookings for any entry with status == 'reserved'.
     try {
       final raw = await _databaseAdapter.get('user_bookings/$userUid');
       if (raw == null) return false;
@@ -522,9 +510,7 @@ class BookingService {
         for (final v in raw.values) {
           if (v is! Map) continue;
           final map = Map<String, Object?>.from(v);
-          final status = ((map['status'] as String?) ?? '')
-              .trim()
-              .toLowerCase();
+          final status = ((map['status'] as String?) ?? '').trim().toLowerCase();
           if (status == 'reserved' || status == 'active') return true;
         }
         return false;
@@ -533,16 +519,12 @@ class BookingService {
       if (raw is List) {
         for (final v in raw) {
           if (v is! Map) continue;
-          final status = ((v['status'] as String?) ?? '')
-              .trim()
-              .toLowerCase();
+          final status = ((v['status'] as String?) ?? '').trim().toLowerCase();
           if (status == 'reserved' || status == 'active') return true;
         }
         return false;
       }
     } catch (_) {
-      // On error, be conservative and assume no active booking so callers
-      // can surface a clearer error from the DB update if necessary.
       return false;
     }
 
@@ -559,7 +541,7 @@ class BookingService {
   Future<void> _cacheAvailability(String shuttleKey, BookingAvailability availability) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File(p.join(dir.path, 'availability_${shuttleKey}.json'));
+      final file = File(p.join(dir.path, 'availability_$shuttleKey.json'));
       final map = <String, Object?>{
         'reportedAvailableSeats': availability.reportedAvailableSeats,
         'occupiedSeats': availability.occupiedSeats,
@@ -575,7 +557,7 @@ class BookingService {
   Future<BookingAvailability?> _loadCachedAvailability(String shuttleKey) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File(p.join(dir.path, 'availability_${shuttleKey}.json'));
+      final file = File(p.join(dir.path, 'availability_$shuttleKey.json'));
       if (!await file.exists()) return null;
       final txt = await file.readAsString();
       final raw = jsonDecode(txt) as Map<String, dynamic>;
