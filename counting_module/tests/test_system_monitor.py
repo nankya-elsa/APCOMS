@@ -36,23 +36,31 @@ class TestSystemMonitorInitialization:
         monitor = SystemMonitor()
         assert monitor.camera_status == "ok"
 
-    def test_fps_threshold_defaults_to_30(self):
+    def test_fps_threshold_defaults_to_5(self):
         """
-        Test that fps_threshold defaults to 30 to match the required
-        minimum frame rate for accurate passenger detection and ensure
-        no passengers are missed during boarding and alighting events
+        Test that fps_threshold defaults to 5 FPS to match what is
+        realistic for CPU-based laptop deployment of YOLOv8n. The
+        original SRS specified 30 FPS assuming GPU acceleration; on
+        a CPU the achievable rate sits around 7-15 FPS during normal
+        operation, so a 30 FPS threshold flooded the diagnostic log
+        with false-positive warnings. 5 FPS is a real floor -- if
+        the model genuinely cannot maintain 5 FPS, something is
+        wrong (model lag, swap thrashing, hardware failure).
         """
         monitor = SystemMonitor()
-        assert monitor.fps_threshold == 30
+        assert monitor.fps_threshold == 5
 
-    def test_latency_threshold_defaults_to_100(self):
+    def test_latency_threshold_defaults_to_250(self):
         """
-        Test that latency_threshold defaults to 100ms to match the
-        maximum allowed processing time per frame as required by
-        NFR-CM-1.4 to ensure real-time passenger detection
+        Test that latency_threshold defaults to 250ms to match what
+        is realistic for CPU-based laptop deployment of YOLOv8n. The
+        original NFR-CM-1.4 specified 100ms assuming GPU acceleration;
+        on a CPU normal per-frame inference takes 100-180ms. 250ms
+        is the realistic ceiling for our deployment -- anything above
+        that signals a real problem.
         """
         monitor = SystemMonitor()
-        assert monitor.latency_threshold == 100
+        assert monitor.latency_threshold == 250
 
     def test_initialize_logs_success_message(self, caplog):
         """
@@ -134,25 +142,26 @@ class TestPerformanceMonitoring:
     def test_logs_warning_when_fps_below_threshold(self, caplog):
         """
         Test that monitor_performance() logs a warning when FPS drops
-        below 30 so the System Monitor can alert maintenance personnel
-        of performance degradation affecting counting accuracy
+        below the new 5 FPS threshold so the System Monitor can alert
+        maintenance personnel of performance degradation affecting
+        counting accuracy.
         """
         import logging
         monitor = SystemMonitor()
         with caplog.at_level(logging.WARNING):
-            monitor.monitor_performance(fps=15.0, latency_ms=35.0)
+            monitor.monitor_performance(fps=3.0, latency_ms=200.0)
         assert "FPS below threshold" in caplog.text
 
     def test_logs_warning_when_latency_above_threshold(self, caplog):
         """
         Test that monitor_performance() logs a warning when latency
-        exceeds 100ms so the System Monitor can alert maintenance
-        personnel as required by NFR-CM-1.4
+        exceeds the new 250ms threshold so the System Monitor can
+        alert maintenance personnel of performance degradation.
         """
         import logging
         monitor = SystemMonitor()
         with caplog.at_level(logging.WARNING):
-            monitor.monitor_performance(fps=30.0, latency_ms=150.0)
+            monitor.monitor_performance(fps=10.0, latency_ms=300.0)
         assert "Latency above threshold" in caplog.text
 
     def test_does_not_log_warning_when_performance_is_normal(self, caplog):
@@ -167,6 +176,46 @@ class TestPerformanceMonitoring:
             monitor.monitor_performance(fps=30.0, latency_ms=35.0)
         assert "FPS below threshold" not in caplog.text
         assert "Latency above threshold" not in caplog.text
+
+    def test_fps_warning_is_rate_limited(self, caplog):
+        """
+        Test that repeated FPS-below-threshold warnings within the
+        rate-limit window only produce ONE log entry, not one per
+        call. Previously the terminal flooded with 100+ FPS warnings
+        per minute during a single main.py run, drowning out
+        meaningful diagnostic signal. The rate limit was already
+        applied to the SQLite write but not to the in-memory logger
+        -- this test ensures the logger gate kicks in too.
+        """
+        import logging
+        monitor = SystemMonitor()
+        with caplog.at_level(logging.WARNING):
+            # fire the warning condition five times back-to-back
+            for _ in range(5):
+                monitor.monitor_performance(fps=2.0, latency_ms=50.0)
+        # exactly one warning -- subsequent calls within the
+        # rate-limit window must be suppressed
+        warning_count = caplog.text.count("FPS below threshold")
+        assert warning_count == 1, (
+            f"Expected 1 FPS warning within rate-limit window, "
+            f"got {warning_count}"
+        )
+
+    def test_latency_warning_is_rate_limited(self, caplog):
+        """
+        Mirror of test_fps_warning_is_rate_limited but for the
+        latency-above-threshold warning. Same problem, same fix.
+        """
+        import logging
+        monitor = SystemMonitor()
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                monitor.monitor_performance(fps=10.0, latency_ms=400.0)
+        warning_count = caplog.text.count("Latency above threshold")
+        assert warning_count == 1, (
+            f"Expected 1 latency warning within rate-limit window, "
+            f"got {warning_count}"
+        )
 
 
 class TestAlertHandling:
@@ -205,7 +254,7 @@ class TestAlertHandling:
         """
         import logging
         monitor = SystemMonitor()
-        alert = {"type": "performance_alert", "fps": 15.0, "latency_ms": 35.0}
+        alert = {"type": "performance_alert", "fps": 3.0, "latency_ms": 35.0}
         with caplog.at_level(logging.WARNING):
             monitor.handle_alert(alert)
         assert "FPS below threshold" in caplog.text

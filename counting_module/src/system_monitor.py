@@ -10,8 +10,8 @@ class SystemMonitor:
     def __init__(self, data_logger=None):
         self.system_status = "Active"
         self.camera_status = "ok"
-        self.fps_threshold = 30
-        self.latency_threshold = 100
+        self.fps_threshold = 5
+        self.latency_threshold = 250
         self.data_logger = data_logger
         self._last_fps_log_time = 0
         self._last_latency_log_time = 0
@@ -83,29 +83,39 @@ class SystemMonitor:
 
         now = time.time()
 
+        # Rate limit BOTH the terminal logger.warning AND the SQLite
+        # write together. Previously the rate limit only gated the
+        # SQLite persist while logger.warning fired every frame the
+        # threshold was crossed, flooding the operator's terminal
+        # with 100+ identical warnings per minute during a single
+        # main.py run. Gating both behind the same interval keeps
+        # the terminal readable AND the dashboard's diagnostic log
+        # informative without losing signal -- if a problem persists
+        # for 10+ seconds, the next interval will log it again.
         if fps < self.fps_threshold:
-            logger.warning(f"FPS below threshold: {fps}")
-            # rate limit: only persist to SQLite every 10 seconds
-            if self.data_logger and (now - self._last_fps_log_time) >= self._log_interval:
-                self.data_logger.log_diagnostic({
-                    "log_type": "warning",
-                    "message": f"FPS below threshold: {fps:.1f}",
-                    "camera_status": self.camera_status,
-                    "fps": round(fps, 2),
-                    "latency_ms": round(latency_ms, 2)
-                })
+            if (now - self._last_fps_log_time) >= self._log_interval:
+                logger.warning(f"FPS below threshold: {fps}")
+                if self.data_logger:
+                    self.data_logger.log_diagnostic({
+                        "log_type": "warning",
+                        "message": f"FPS below threshold: {fps:.1f}",
+                        "camera_status": self.camera_status,
+                        "fps": round(fps, 2),
+                        "latency_ms": round(latency_ms, 2)
+                    })
                 self._last_fps_log_time = now
 
         if latency_ms > self.latency_threshold:
-            logger.warning(f"Latency above threshold: {latency_ms}")
-            if self.data_logger and (now - self._last_latency_log_time) >= self._log_interval:
-                self.data_logger.log_diagnostic({
-                    "log_type": "warning",
-                    "message": f"Latency above threshold: {latency_ms:.1f}ms",
-                    "camera_status": self.camera_status,
-                    "fps": round(fps, 2),
-                    "latency_ms": round(latency_ms, 2)
-                })
+            if (now - self._last_latency_log_time) >= self._log_interval:
+                logger.warning(f"Latency above threshold: {latency_ms}")
+                if self.data_logger:
+                    self.data_logger.log_diagnostic({
+                        "log_type": "warning",
+                        "message": f"Latency above threshold: {latency_ms:.1f}ms",
+                        "camera_status": self.camera_status,
+                        "fps": round(fps, 2),
+                        "latency_ms": round(latency_ms, 2)
+                    })
                 self._last_latency_log_time = now
 
     def handle_alert(self, alert):
