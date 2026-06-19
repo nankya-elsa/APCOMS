@@ -18,6 +18,112 @@ from display import DisplayComponent
 from firebase_sync import FirebaseSyncComponent
 from data_logger import DataLogger
 from system_monitor import SystemMonitor
+from scenario_manager import ScenarioManager
+from booking_completer import BookingCompleter
+from service_day_manager import ServiceDayManager
+from seat_pool_manager import SeatPoolManager
+
+def draw_ai_visualization(frame, tracks, counting_logic, current_stop):
+    """
+    Renders the AI's view of the world onto a copy of the camera
+    frame for the panel/demo to see. Shows:
+      - Bounding boxes around every tracked person
+      - Track IDs above each box so persistence is visible
+      - The virtual counting line at the vertical midpoint
+      - Live overlay with passenger count, capacity, status, stop
+
+    Returns the annotated frame so the caller can imshow() it in a
+    dedicated visualization window separate from the OLED display.
+    """
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+    midpoint = height // 2
+
+    # virtual counting line (dashed horizontal)
+    dash_length = 20
+    for x in range(0, width, dash_length * 2):
+        cv2.line(
+            annotated,
+            (x, midpoint),
+            (x + dash_length, midpoint),
+            (0, 200, 255),  # orange-ish
+            2,
+        )
+    cv2.putText(
+        annotated,
+        "COUNTING LINE",
+        (10, midpoint - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 200, 255),
+        1,
+    )
+
+    # bounding boxes for each tracked person
+    for track in tracks:
+        x1, y1, x2, y2 = [int(v) for v in track["bbox"]]
+        track_id = track.get("track_id", "?")
+        counted = track_id in counting_logic.counted_tracks
+        color = (0, 255, 0) if counted else (0, 255, 255)  # green or yellow
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            annotated,
+            f"ID:{track_id}",
+            (x1, y1 - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
+
+    # top-left overlay: count + status
+    occupancy = counting_logic.calculate_occupancy()
+    count_text = (
+        f"PASSENGERS: {occupancy['passenger_count']} / "
+        f"{counting_logic.total_capacity}"
+    )
+    status_text = f"STATUS: {occupancy['occupancy_status']}"
+    cv2.rectangle(annotated, (10, 10), (380, 80), (0, 0, 0), -1)
+    cv2.putText(
+        annotated,
+        count_text,
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+    )
+    cv2.putText(
+        annotated,
+        status_text,
+        (20, 65),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+
+    # top-right overlay: current stop
+    stop_text = f"Stop: {current_stop}"
+    text_size = cv2.getTextSize(stop_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+    cv2.rectangle(
+        annotated,
+        (width - text_size[0] - 30, 10),
+        (width - 10, 50),
+        (0, 0, 0),
+        -1,
+    )
+    cv2.putText(
+        annotated,
+        stop_text,
+        (width - text_size[0] - 20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+
+    return annotated
 
 # configure logging
 logging.basicConfig(
@@ -36,6 +142,21 @@ def main():
     logger.info("BSE26-8 | Nankya Elsa & Musiimenta Cissylyn")
     logger.info("=" * 60)
 
+    # ── STEP 0: Service-day reset (idempotent) ─────────────────
+    # Resets live shuttle state to fresh-day baseline if a new
+    # service day has begun since the last reset. Safe to call —
+    # only performs work if a reset is actually due today.
+    service_day_firebase = FirebaseSyncComponent(
+        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
+    )
+    service_day_firebase.initialize()
+    service_day_manager = ServiceDayManager(
+        firebase_sync=service_day_firebase
+    )
+    reset_date = service_day_manager.reset_if_needed()
+    if reset_date:
+        logger.info(f"Service-day reset performed for {reset_date}")
+
     # ── STEP 1: Initialize all components ──────────────────────
     logger.info("Initializing system components...")
 
@@ -47,12 +168,41 @@ def main():
     system_monitor = SystemMonitor(data_logger=data_logger)
     system_monitor.initialize()
 
+    # Firebase Sync — constructed early so SeatPoolManager can use it
+    firebase_sync = FirebaseSyncComponent(
+        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
+    )
+    firebase_sync.initialize()
+
+    # Seat Pool Manager — owns available_seats, syncs every mutation
+    # to Firebase. CountingLogic delegates alighting seat releases here.
+    seat_pool_manager = SeatPoolManager(
+        total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+        db_path="local_database/apcoms.db",
+        firebase_sync=firebase_sync,
+    )
+
     # Counting Logic
-    counting_logic = CountingLogic()
+    counting_logic = CountingLogic(
+        data_logger=data_logger,
+        seat_pool_manager=seat_pool_manager,
+    )
     counting_logic.initialize()
 
+    # Scenario Manager - decides which video to play this run
+    scenario_manager = ScenarioManager()
+    current_scenario = scenario_manager.get_current_scenario()
+
     # Camera Interface
-    camera_source = os.getenv("CAMERA_SOURCE", "data/test_video.mp4")
+    # if scenarios are available, use the current scenario video for this run
+    # otherwise fall back to the configured CAMERA_SOURCE
+    if current_scenario:
+        camera_source = current_scenario
+        logger.info(f"Playing scenario: {os.path.basename(current_scenario)}")
+    else:
+        camera_source = os.getenv("CAMERA_SOURCE", "data/test_video.mp4")
+        logger.info(f"No scenarios found, using CAMERA_SOURCE: {camera_source}")
+
     camera = CameraInterface(source=camera_source)
     camera.start()
 
@@ -69,11 +219,8 @@ def main():
     display = DisplayComponent()
     display.initialize_display()
 
-    # Firebase Sync
-    firebase_sync = FirebaseSyncComponent(
-        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001")
-    )
-    firebase_sync.initialize()
+    # Booking Completer — marks bookings as 'completed' on alighting
+    booking_completer = BookingCompleter()
 
     logger.info("=" * 60)
     logger.info("All components initialized! Starting main loop...")
@@ -86,6 +233,8 @@ def main():
     last_storage_check = time.time()
     firebase_sync_interval = 2
     storage_check_interval = 3600
+
+    track_centroids = {}
 
     try:
         while True:
@@ -105,12 +254,27 @@ def main():
             # track persons
             tracks = tracker.track_persons(detections, frame)
 
-            # update count for each track
+           # update count for each track
             for track in tracks:
+                track_id = track.get("track_id", 0)
+
+                # compute centroid from the current bbox (centre of the box)
+                x1, y1, x2, y2 = track["bbox"]
+                current_centroid = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+                # look up where this track was last frame; if it's new,
+                # seed previous = current so it can't appear to "cross"
+                # the line on its very first frame (would otherwise
+                # produce a false count the instant a track is born)
+                previous_centroid = track_centroids.get(track_id, current_centroid)
+
+                # remember current position for next frame
+                track_centroids[track_id] = current_centroid
+
                 track_dict = {
-                    "track_id": track.get("track_id", 0),
-                    "previous_centroid": track.get("previous_centroid", (0, 0)),
-                    "current_centroid": track.get("current_centroid", (0, 540))
+                    "track_id": track_id,
+                    "previous_centroid": previous_centroid,
+                    "current_centroid": current_centroid,
                 }
 
                 # capture count BEFORE update so we can detect if it actually changed
@@ -128,6 +292,16 @@ def main():
                         "available_seats": occupancy["available_seats"],
                         "stop_location": counting_logic.get_current_stop()
                     })
+
+                    # on alighting, try to close the matching booking.
+                    # non-app passengers and detection glitches won't
+                    # match anything -- the completer handles that
+                    # gracefully so this never disrupts counting.
+                    if direction == "alighting":
+                        booking_completer.complete_alighting(
+                            current_stop=counting_logic.get_current_stop()
+                        )
+
 
             # calculate occupancy
             occupancy = counting_logic.calculate_occupancy()
@@ -164,6 +338,14 @@ def main():
             cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('current_stop', ?)", (occupancy["current_stop"],))
             conn.commit()
             conn.close()
+
+            # show AI visualization window (camera feed + bounding boxes +
+            # track IDs + counting line + overlays).
+            ai_view = draw_ai_visualization(
+                frame, tracks, counting_logic, occupancy["current_stop"]
+            )
+            ai_view_resized = cv2.resize(ai_view, (960, 540))
+            cv2.imshow("APCOMS - AI Counter", ai_view_resized)
 
             # update OLED display
             display.show(occupancy, system_status=status["system_status"])
@@ -206,8 +388,8 @@ def main():
         camera.stop()
         cv2.destroyAllWindows()
         logger.info("Camera stopped")
-        # advance to next stop so next run starts at the next location
-        counting_logic.advance_stop()
+        # advance scenario index so next run plays the next scenario
+        scenario_manager.advance()
 
         # write offline status to SQLite so dashboard reflects shutdown
         conn = sqlite3.connect('local_database/apcoms.db')

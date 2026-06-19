@@ -1,4 +1,4 @@
-antiorm==1.2.1
+﻿antiorm==1.2.1
 anyio==4.13.0
 blinker==1.9.0
 CacheControl==0.14.4
@@ -76,3 +76,4 @@ ultralytics==8.4.28
 ultralytics-thop==2.0.18
 urllib3==2.6.3
 Werkzeug==3.1.7
+pyzbar==0.1.9

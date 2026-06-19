@@ -382,27 +382,69 @@ class BookingService {
 
   Future<void> cancelBooking({
     required BookingRecord booking,
-    required String reason,
+    String reason = 'Cancelled by user',
   }) async {
     if (!booking.isActive) {
       throw BookingException('Only active reservations can be cancelled.');
     }
-    // Write both the user's booking entry and the global booking entry in a
-    // single multi-path update. Avoid an extra read to reduce latency and
-    // minimize the time the user waits for cancellation to complete.
+
+    // Empty/whitespace reasons collapse to the default so the shuttle
+    // listener never mistakes a user cancellation for a no-show.
+    final effectiveReason =
+        reason.trim().isEmpty ? 'Cancelled by user' : reason.trim();
+
     final updates = <String, Object?>{
-      'user_bookings/${booking.userUid}/${booking.bookingId}/status': 'cancelled',
-      'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason': reason.trim(),
-      'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at': ServerValue.timestamp,
-      'bookings/${booking.bookingId}/status': 'cancelled',
-      'bookings/${booking.bookingId}/cancel_reason': reason.trim(),
-      'bookings/${booking.bookingId}/cancelled_at': ServerValue.timestamp,
+      'user_bookings/${booking.userUid}/${booking.bookingId}/status':
+          'cancelled',
+      'user_bookings/${booking.userUid}/${booking.bookingId}/cancel_reason':
+          effectiveReason,
+      'user_bookings/${booking.userUid}/${booking.bookingId}/cancelled_at':
+          ServerValue.timestamp,
     };
 
-    // If the caller provided a createdAt timestamp, persist it so the global
-    // entry remains consistent. This is optional and non-blocking.
-    if (booking.createdAt != null) {
-      updates['bookings/${booking.bookingId}/created_at'] = booking.createdAt;
+    final bookingRef = _database.ref().child('bookings').child(booking.bookingId);
+    try {
+      final snap = await bookingRef.get();
+      if (snap.value == null) {
+        // Global booking entry missing — create a minimal cancelled record so
+        // the system remains consistent and the user can re-book.
+        final minimal = <String, Object?>{
+          'booking_id': booking.bookingId,
+          'user_uid': booking.userUid,
+          'shuttle_key': booking.shuttleKey,
+          'pickup_stop': booking.pickupStop,
+          'pickup_index': booking.pickupIndex,
+          'destination_stop': booking.destinationStop,
+          'destination_index': booking.destinationIndex,
+          'status': 'cancelled',
+          'cancel_reason': effectiveReason,
+          'cancelled_at': ServerValue.timestamp,
+          'created_at': booking.createdAt ?? ServerValue.timestamp,
+        };
+        updates['bookings/${booking.bookingId}'] = minimal;
+      } else {
+        updates['bookings/${booking.bookingId}/status'] = 'cancelled';
+        updates['bookings/${booking.bookingId}/cancel_reason'] = effectiveReason;
+        updates['bookings/${booking.bookingId}/cancelled_at'] =
+            ServerValue.timestamp;
+      }
+    } catch (_) {
+      // If reading the global booking fails for any reason, still ensure the
+      // user's copy is updated so they can make new bookings; create a minimal
+      // global entry as a best-effort.
+      updates['bookings/${booking.bookingId}'] = <String, Object?>{
+        'booking_id': booking.bookingId,
+        'user_uid': booking.userUid,
+        'shuttle_key': booking.shuttleKey,
+        'pickup_stop': booking.pickupStop,
+        'pickup_index': booking.pickupIndex,
+        'destination_stop': booking.destinationStop,
+        'destination_index': booking.destinationIndex,
+        'status': 'cancelled',
+        'cancel_reason': effectiveReason,
+        'cancelled_at': ServerValue.timestamp,
+        'created_at': booking.createdAt ?? ServerValue.timestamp,
+      };
     }
 
     await _databaseAdapter.update(updates);

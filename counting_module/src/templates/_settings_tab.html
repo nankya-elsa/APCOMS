@@ -1,0 +1,95 @@
+<!-- Settings tab partial — included by dashboard.html.
+
+  Operator-facing shuttle settings. Most shuttle properties
+  (capacity, stops) are deployment-level concerns and shown
+  here for reference only. Service hours and the emergency
+  reset are the operational levers an operator may touch
+  during normal use.
+-->
+
+<div id="tab-settings" class="tab-content">
+  <div id="settings-alert" class="alert"></div>
+
+  <!-- READ-ONLY: shuttle info -->
+  <div class="cards-section">
+    <div class="cards-section-label">Shuttle Information</div>
+    <div class="settings-info-grid">
+      <div class="settings-info-block">
+        <div class="settings-info-label">Total Capacity</div>
+        <div class="settings-info-box">{{ total_capacity }} seats</div>
+      </div>
+      <div class="settings-info-block">
+        <div class="settings-info-label">Designated Stops</div>
+        <div class="settings-info-box">{{ stops|join(", ") }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDITABLE: service hours -->
+  <div class="cards-section">
+    <div class="cards-section-label">Configurable</div>
+    <div class="settings-desc">
+      Define when the shuttle is in service. The daily reset fires at the
+      service start time and the dashboard reflects in-service vs off-hours
+      accordingly.
+    </div>
+    <div class="settings-grid">
+      <div class="settings-group">
+        <label>Service Start Time</label>
+        <input
+          type="time"
+          id="day-start-time"
+          value="{{ data.service_hours.start }}"
+        />
+      </div>
+      <div class="settings-group">
+        <label>Service End Time</label>
+        <input
+          type="time"
+          id="day-end-time"
+          value="{{ data.service_hours.end }}"
+        />
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button class="btn-save" onclick="saveSettings()">Save Hours</button>
+      <button class="btn-secondary" onclick="resetServiceHoursToDefaults()">
+        Reset to Defaults
+      </button>
+    </div>
+  </div>
+
+  <!-- DANGER ZONE -->
+  <div class="cards-section danger">
+    <div class="cards-section-label danger-label">Emergency Zone</div>
+    <div class="settings-desc">
+      Reset the passenger count to zero. Use this only when necessary after
+      discussion with the operations team.
+    </div>
+    <button class="btn-danger" onclick="openResetCountModal()">
+      Reset Count
+    </button>
+  </div>
+</div>
+
+<!-- RESET COUNT CONFIRMATION MODAL (hidden by default) -->
+<div id="reset-count-modal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title">Confirm Reset Count</div>
+    <div class="modal-body">
+      You are about to reset the live passenger count to zero. This action is
+      intended only for emergencies. Once performed, the previous count cannot
+      be recovered.
+      <br /><br />
+      Do you want to proceed?
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeResetCountModal()">
+        Cancel
+      </button>
+      <button class="btn-danger" onclick="performResetCount()">
+        Confirm Reset
+      </button>
+    </div>
+  </div>
+</div>

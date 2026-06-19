@@ -7,12 +7,14 @@ logger = logging.getLogger(__name__)
 
 class CountingLogic:
 
-    def __init__(self, total_capacity=None, db_path=None):
+    def __init__(self, total_capacity=None, db_path=None, data_logger=None, seat_pool_manager=None):
         import json
 
         self.db_path = db_path or "local_database/apcoms.db"
         self.virtual_entry_zone = "upper"
         self.virtual_exit_zone = "lower"
+        self.data_logger = data_logger
+        self.seat_pool_manager = seat_pool_manager
         self.counted_tracks = []
         self.current_stop_index = 0
         self.passenger_count = 0
@@ -100,14 +102,24 @@ class CountingLogic:
 
         conn.commit()
 
-        cursor.execute("""
-            SELECT passenger_count FROM passenger_events
-            ORDER BY event_id DESC LIMIT 1
-        """)
+        # read the LIVE passenger count from system_state, NOT from
+        # the last passenger_events row.
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='current_count'"
+        )
         result = cursor.fetchone()
         if result:
-            self.passenger_count = result[0]
-            self.available_seats = self.total_capacity - self.passenger_count
+            self.passenger_count = int(result[0])
+
+        # read available_seats from system_state — stored field, not derived
+        cursor.execute(
+            "SELECT value FROM system_state WHERE key='available_seats'"
+        )
+        seats_result = cursor.fetchone()
+        if seats_result:
+            self.available_seats = int(seats_result[0])
+        # If no entry exists (fresh deployment), available_seats keeps
+        # its default value of total_capacity set in __init__.
 
         cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
         stop_result = cursor.fetchone()
@@ -149,6 +161,19 @@ class CountingLogic:
         Updates passenger count based on direction of movement.
         Prevents double counting by tracking already counted track IDs.
         Logs boarding and alighting events for the Data Logger Component.
+
+        When the AI detects a boarding while the shuttle is already at
+        capacity, the boarding is REFUSED (passenger_count not bumped,
+        no passenger_event logged) AND a diagnostic alert is raised
+        through the optional DataLogger. This surfaces possible safety
+        risks (overloading attempts) and AI false positives to the
+        operator's dashboard. The track_id is still marked as counted
+        so the alert doesn't re-fire on every subsequent frame for
+        the same detection.
+
+        When alighting is detected with count already at zero, a less
+        severe warning is logged through the same mechanism. This is
+        usually an AI false positive but still worth surfacing.
         """
         if track is None:
             return
@@ -161,20 +186,57 @@ class CountingLogic:
         if direction == "boarding":
             if self.passenger_count < self.total_capacity:
                 self.passenger_count += 1
-                self.available_seats -= 1
                 self.counted_tracks.append(track["track_id"])
                 logger.info(f"Boarding event - passenger count: {self.passenger_count}")
             else:
-                logger.warning("Shuttle at full capacity")
+                # ILLEGAL BOARDING: shuttle at capacity but AI sees someone
+                # boarding. Mark track_id so we don't re-alert every frame.
+                self.counted_tracks.append(track["track_id"])
+                logger.warning(
+                    "Illegal boarding attempt: shuttle at full capacity"
+                )
+                if self.data_logger:
+                    try:
+                        self.data_logger.log_diagnostic({
+                            "log_type": "error",
+                            "message": (
+                                "Illegal boarding attempt: shuttle at full capacity"
+                            ),
+                        })
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to log illegal-boarding alert: {e}"
+                        )
 
         elif direction == "alighting":
             if self.passenger_count > 0:
                 self.passenger_count -= 1
-                self.available_seats += 1
                 self.counted_tracks.append(track["track_id"])
+                # delegate seat release to the manager -- single source
+                # of truth for available_seats. refresh in-memory cache
+                # afterwards so reads of counter.available_seats stay fresh.
+                if self.seat_pool_manager is not None:
+                    self.seat_pool_manager.increment(reason="alight")
+                    self.available_seats = self.seat_pool_manager.get_current()
                 logger.info(f"Alighting event - passenger count: {self.passenger_count}")
             else:
-                logger.warning("Count already at zero")
+                # GHOST ALIGHTING: AI sees someone exit but count is
+                # already zero. Likely an AI false positive but worth
+                # surfacing for diagnostics.
+                self.counted_tracks.append(track["track_id"])
+                logger.warning("Ghost alighting: count already at zero")
+                if self.data_logger:
+                    try:
+                        self.data_logger.log_diagnostic({
+                            "log_type": "warning",
+                            "message": (
+                                "Ghost alighting: Model exit detected but count is zero"
+                            ),
+                        })
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to log ghost-alighting alert: {e}"
+                        )
 
     def calculate_occupancy(self):
         """
@@ -214,10 +276,21 @@ class CountingLogic:
         if os.path.exists(self.db_path):
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            # write both the index AND the stop name to keep them
+            # in lock-step. Other components read 'current_stop'
+            # (the name) for display/Firebase, so it must stay
+            # consistent with the index that advance_stop owns.
+            current_stop_name = self.designated_stops_list[
+                self.current_stop_index
+            ]
             cursor.execute("""
                 INSERT OR REPLACE INTO system_state (key, value)
                 VALUES ('current_stop_index', ?)
             """, (str(self.current_stop_index),))
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_state (key, value)
+                VALUES ('current_stop', ?)
+            """, (current_stop_name,))
             conn.commit()
             conn.close()
 

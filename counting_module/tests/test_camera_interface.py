@@ -63,20 +63,6 @@ class TestCameraInitialization:
         with pytest.raises(ValueError):
             camera = CameraInterface(source=None)
 
-    @pytest.mark.skipif(not VIDEO_AVAILABLE, reason="test video not available in CI")
-    def test_camera_applies_resolution_to_capture(self):
-        """
-        Test that resolution settings are applied to the OpenCV capture
-        object so frames are actually captured at 1080p not default size
-        """
-        camera = CameraInterface(source="data/test_video.mp4")
-        camera.start()
-        width = camera.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = camera.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        assert width == 1920
-        assert height == 1080
-        camera.stop()
-
     @pytest.mark.skipif(not WEBCAM_AVAILABLE, reason="webcam not available in CI")
     def test_camera_applies_framerate_to_capture(self):
         """

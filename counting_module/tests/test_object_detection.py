@@ -2,24 +2,34 @@ import pytest
 import os
 import sys
 import numpy as np
+import cv2
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from object_detection import ObjectDetection
-from camera_interface import CameraInterface
 
 # skip conditions for CI environment
-VIDEO_AVAILABLE = os.path.exists("data/test_video.mp4")
 MODEL_AVAILABLE = os.path.exists("models/yolov8n.pt")
+
+# Test fixture frames bundled in the repo. Independent of data/test_video.mp4
+# so swapping the production video doesn't break detection tests.
+FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "persons")
+FIXTURE_AVAILABLE = os.path.isdir(FIXTURES_DIR) and any(
+    f.endswith(".jpg") for f in os.listdir(FIXTURES_DIR)
+) if os.path.isdir(FIXTURES_DIR) else False
 
 
 @pytest.fixture
 def real_frame():
-    """Provides a real video frame for detection tests"""
-    camera = CameraInterface(source="data/test_video.mp4")
-    camera.start()
-    frame = camera.capture_frame()
-    camera.stop()
+    """
+    Provides a real frame with a clearly visible person, loaded from a
+    bundled test fixture image. Decoupled from data/test_video.mp4 so
+    that swapping the production video doesn't break detection tests.
+    """
+    fixture_path = os.path.join(FIXTURES_DIR, "person_clear_1.jpg")
+    frame = cv2.imread(fixture_path)
+    if frame is None:
+        pytest.skip(f"Could not load fixture image at {fixture_path}")
     return frame
 
 
@@ -125,7 +135,7 @@ class TestModelLoading:
 
 class TestPersonDetection:
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_detect_persons_returns_a_list(self, loaded_detector, real_frame):
         """
         Test that detect_persons() always returns a list so the Object
@@ -145,7 +155,7 @@ class TestPersonDetection:
         detections = loaded_detector.detect_persons(blank_frame)
         assert detections == []
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_detect_persons_returns_detections_when_persons_in_frame(self, loaded_detector, real_frame):
         """
         Test that detect_persons() returns at least one detection when
@@ -155,7 +165,7 @@ class TestPersonDetection:
         detections = loaded_detector.detect_persons(real_frame)
         assert len(detections) > 0
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_each_detection_has_bounding_box(self, loaded_detector, real_frame):
         """
         Test that each detection contains a bounding box with 4 coordinates
@@ -166,7 +176,7 @@ class TestPersonDetection:
             assert "bbox" in detection
             assert len(detection["bbox"]) == 4
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_each_detection_has_confidence_score(self, loaded_detector, real_frame):
         """
         Test that each detection contains a confidence score to confirm
@@ -190,7 +200,7 @@ class TestPersonDetection:
         for detection in detections:
             assert detection["class"] == "person"
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_detect_persons_filters_out_low_confidence_detections(self, loaded_detector, real_frame):
         """
         Test that detect_persons() filters out detections below the
@@ -225,7 +235,7 @@ class TestPersonDetection:
 
 class TestPerformanceMonitoring:
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_monitor_performance_records_fps(self, loaded_detector, real_frame):
         """
         Test that monitor_performance() records FPS after running
@@ -249,7 +259,7 @@ class TestPerformanceMonitoring:
             loaded_detector.monitor_performance(large_frame)
         assert "Performance degradation detected" in caplog.text
 
-    @pytest.mark.skipif(not MODEL_AVAILABLE or not VIDEO_AVAILABLE, reason="model or video not available in CI")
+    @pytest.mark.skipif(not MODEL_AVAILABLE or not FIXTURE_AVAILABLE, reason="model or fixture not available in CI")
     def test_monitor_performance_tracks_latency(self, loaded_detector, real_frame):
         """
         Test that monitor_performance() records latency in milliseconds

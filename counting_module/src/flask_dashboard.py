@@ -3,6 +3,9 @@ import os
 from flask import Flask
 import sqlite3
 import datetime
+import sqlite3
+import csv
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +14,12 @@ class FlaskDashboard:
     def __init__(self):
         # explicitly tell Flask where templates are
         template_dir = os.path.join(os.path.dirname(__file__), 'templates')
-        self.app = Flask(__name__, template_folder=template_dir)
+        static_dir = os.path.join(os.path.dirname(__file__), 'static')
+        self.app = Flask(
+            __name__,
+            template_folder=template_dir,
+            static_folder=static_dir,
+        )
         self.session_timeout = 30
         self.failed_login_attempts = 0
         self.account_locked = False
@@ -73,81 +81,42 @@ class FlaskDashboard:
 
     def check_end_of_day(self):
         """
-        Detects when the shuttle's service hours have ended for the day
-        and performs end-of-day reset: clears passenger count, resets
-        stop index, so the new service day starts fresh.
-        Runs on every dashboard refresh but only resets once per day.
+        Triggers the daily service-day reset if one is due.
+
+        Delegates entirely to ServiceDayManager which encapsulates
+        the decision (should_reset) and the action (perform_reset).
+        Called from render_dashboard on every dashboard load so the
+        reset fires the moment a new service day begins, regardless
+        of whether main.py has run yet.
+
+        The method name 'check_end_of_day' is preserved for backward
+        compatibility with existing callers, but the underlying
+        logic now resets at the START of the service day (default
+        06:00), not at the end. ServiceDayManager owns the full
+        semantics — see its module docstring for details.
         """
+        from service_day_manager import ServiceDayManager
+        from firebase_sync import FirebaseSyncComponent
+        import os as _os
 
         try:
-            conn = sqlite3.connect("local_database/apcoms.db")
-            cursor = conn.cursor()
-
-            # read day_end_time (default 24:00)
-            cursor.execute("SELECT value FROM system_state WHERE key='day_end_time'")
-            row = cursor.fetchone()
-            day_end = row[0] if row else "24:00"
-
-            # read last_reset_date
-            cursor.execute("SELECT value FROM system_state WHERE key='last_reset_date'")
-            row = cursor.fetchone()
-            last_reset_date = row[0] if row else None
-
-            # parse day_end
-            end_h, end_m = map(int, day_end.split(":"))
-            if end_h == 24:
-                end_h = 23
-                end_m = 59
-
-            now = datetime.datetime.now()
-            today_str = now.strftime("%Y-%m-%d")
-            today_end = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
-
-            # figure out the most recent day_end that should have triggered a reset
-            if now >= today_end:
-                most_recent_end_date = today_str
-            else:
-                yesterday = now - datetime.timedelta(days=1)
-                most_recent_end_date = yesterday.strftime("%Y-%m-%d")
-
-            # if we haven't reset for that day yet, do it now
-            if last_reset_date != most_recent_end_date:
-                logger.info(f"End of day detected - performing reset for {most_recent_end_date}")
-
-                # reset live state
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('current_count', '0')
-                """)
-
-                # read total_capacity to reset available_seats
-                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
-                cap_row = cursor.fetchone()
-                total_capacity = cap_row[0] if cap_row else "20"
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('available_seats', ?)
-                """, (total_capacity,))
-
-                # reset stop index back to first stop
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('current_stop_index', '0')
-                """)
-
-                # mark that we've reset for this date
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('last_reset_date', ?)
-                """, (most_recent_end_date,))
-
-                conn.commit()
-                logger.info("End of day reset completed successfully")
-
-            conn.close()
-
+            # firebase_sync wired so the service-day reset also
+            # propagates to Firebase, not just SQLite.
+            firebase_sync = FirebaseSyncComponent(
+                shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+            )
+            firebase_sync.initialize()
+            manager = ServiceDayManager(
+                db_path="local_database/apcoms.db",
+                firebase_sync=firebase_sync,
+            )
+            reset_date = manager.reset_if_needed()
+            if reset_date:
+                logger.info(
+                    f"Service-day reset performed for {reset_date}"
+                )
         except Exception as e:
-            logger.error(f"Error during end of day check: {e}")
+            logger.error(f"Error during service-day check: {e}")
 
     def render_dashboard(self):
         """
@@ -286,13 +255,14 @@ class FlaskDashboard:
                     "latency_ms": row[5]
                 })
 
-            # today's summary - use last_reset_date as cutoff so summary aligns with service day
-            cursor.execute("SELECT value FROM system_state WHERE key='last_reset_date'")
+            # today's summary - use last_reset_date as the cutoff so
+            # the summary aligns with the current service day.
+            cursor.execute(
+                "SELECT value FROM system_state WHERE key='last_reset_date'"
+            )
             reset_row = cursor.fetchone()
             if reset_row:
-                # use the day after last reset as the start of "today's" service day
-                last_reset = datetime.datetime.strptime(reset_row[0], "%Y-%m-%d")
-                cutoff = (last_reset + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+                cutoff = reset_row[0]
             else:
                 cutoff = datetime.datetime.now().strftime("%Y-%m-%d")
 
@@ -331,104 +301,181 @@ class FlaskDashboard:
         except Exception:
             pass
 
+        display_end = "23:59" if day_end == "24:00" else day_end
+
         return {
             "occupancy": occupancy,
             "system_status": system_status,
             "diagnostic_logs": diagnostic_logs,
-            "today_summary": today_summary
+            "today_summary": today_summary,
+            "service_hours": {
+                "start": day_start,
+                "end": display_end,
+            },
         }
 
-    def generate_analytics(self):
+    def generate_analytics(self, start_date=None, end_date=None, start_time=None, end_time=None):
         """
         Queries the passenger_events table in SQLite to generate
-        operational analytics including total boardings, alightings,
-        peak hour, most popular stop and average occupancy for today.
-        Returns all analytics data as a dictionary.
+        operational analytics. When date range is provided, filters
+        accordingly. Otherwise returns all historical data since
+        deployment. Returns summary metrics plus chart-ready datasets
+        for shuttle adoption, peak hours, and stop popularity.
         """
         import sqlite3
-        import datetime
 
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-
-        total_boardings_today = 0
-        total_alightings_today = 0
+        total_boardings = 0
         peak_hour = "N/A"
         most_popular_stop = "N/A"
         average_occupancy = 0.0
+        adoption_data = {"labels": [], "values": []}
+        peak_hours_data = {"labels": [], "values": []}
+        stop_popularity_data = {"labels": [], "values": []}
+        day_of_week_data = {"labels": [], "values": []}
 
         try:
             conn = sqlite3.connect("local_database/apcoms.db")
             cursor = conn.cursor()
 
-            # total boardings today
-            cursor.execute("""
-                SELECT COUNT(*) FROM passenger_events
-                WHERE direction = 'boarding' AND timestamp >= ?
-            """, (today,))
-            total_boardings_today = cursor.fetchone()[0]
+            # build optional date filter
+            date_filter = ""
+            params = []
+            if start_date:
+                date_filter += " AND timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                # add a full day so end_date is inclusive
+                date_filter += " AND timestamp <= ?"
+                params.append(end_date + " 23:59:59")
+                # time-of-day filter applied to EACH day in the range
+            if start_time:
+                date_filter += " AND strftime('%H:%M', timestamp) >= ?"
+                params.append(start_time)
+            if end_time:
+                date_filter += " AND strftime('%H:%M', timestamp) <= ?"
+                params.append(end_time)
 
-            # total alightings today
-            cursor.execute("""
-                SELECT COUNT(*) FROM passenger_events
-                WHERE direction = 'alighting' AND timestamp >= ?
-            """, (today,))
-            total_alightings_today = cursor.fetchone()[0]
-
-            # peak hour
-            cursor.execute("""
-                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
-                FROM passenger_events
-                WHERE direction = 'boarding' AND timestamp >= ?
-                GROUP BY hour ORDER BY count DESC LIMIT 1
-            """, (today,))
-            row = cursor.fetchone()
-            if row:
-                peak_hour = f"{row[0]}:00"
-
-            # most popular stop
-            cursor.execute("""
-                SELECT stop_location, COUNT(*) as count
-                FROM passenger_events
-                WHERE direction = 'boarding' AND timestamp >= ?
-                GROUP BY stop_location ORDER BY count DESC LIMIT 1
-            """, (today,))
-            row = cursor.fetchone()
-            if row:
-                most_popular_stop = row[0]
+            # total boardings (filtered or all-time)
+            query = f"SELECT COUNT(*) FROM passenger_events WHERE direction='boarding' {date_filter}"
+            cursor.execute(query, params)
+            total_boardings = cursor.fetchone()[0]
 
             # average occupancy
-            cursor.execute("""
-                SELECT AVG(passenger_count) FROM passenger_events
-                WHERE timestamp >= ?
-            """, (today,))
+            query = f"SELECT AVG(passenger_count) FROM passenger_events WHERE 1=1 {date_filter}"
+            cursor.execute(query, params)
             row = cursor.fetchone()
-            if row[0]:
-                average_occupancy = round(row[0], 2)
+            average_occupancy = round(row[0], 2) if row[0] else 0.0
+
+            # peak hour
+            query = f"""
+                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY hour ORDER BY count DESC LIMIT 1
+            """
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            peak_hour = f"{row[0]}:00" if row else "N/A"
+
+            # most popular stop
+            query = f"""
+                SELECT stop_location, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY stop_location ORDER BY count DESC LIMIT 1
+            """
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            most_popular_stop = row[0] if row else "N/A"
+
+            #  Graph 1: Shuttle Adoption (boardings per day)
+            query = f"""
+                SELECT DATE(timestamp) as day, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY day ORDER BY day ASC
+            """
+            cursor.execute(query, params)
+            for day, count in cursor.fetchall():
+                adoption_data["labels"].append(day)
+                adoption_data["values"].append(count)
+
+            # Graph 2: Peak Hours (boardings per hour)
+            # initialize all 24 hours so chart shows full day
+            hourly = {f"{h:02d}:00": 0 for h in range(24)}
+            query = f"""
+                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY hour
+            """
+            cursor.execute(query, params)
+            for hour, count in cursor.fetchall():
+                hourly[f"{hour}:00"] = count
+            peak_hours_data["labels"] = list(hourly.keys())
+            peak_hours_data["values"] = list(hourly.values())
+
+            # Graph 3: Stop Popularity (boardings per stop)
+            query = f"""
+                SELECT stop_location, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY stop_location ORDER BY count DESC
+            """
+            cursor.execute(query, params)
+            for stop, count in cursor.fetchall():
+                stop_popularity_data["labels"].append(stop)
+                stop_popularity_data["values"].append(count)
+
+            # Graph 4: Day-of-Week Pattern (boardings per weekday)
+            weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            weekday_counts = {name: 0 for name in weekday_names}
+
+            # SQLite strftime('%w') returns 0=Sunday, 1=Monday, ..., 6=Saturday
+            query = f"""
+                SELECT strftime('%w', timestamp) as weekday, COUNT(*) as count
+                FROM passenger_events
+                WHERE direction='boarding' {date_filter}
+                GROUP BY weekday
+            """
+            cursor.execute(query, params)
+            sqlite_to_name = {"1": "Monday", "2": "Tuesday", "3": "Wednesday",
+                            "4": "Thursday", "5": "Friday", "6": "Saturday", "0": "Sunday"}
+            for weekday, count in cursor.fetchall():
+                name = sqlite_to_name.get(weekday)
+                if name:
+                    weekday_counts[name] = count
+
+            day_of_week_data["labels"] = weekday_names
+            day_of_week_data["values"] = [weekday_counts[name] for name in weekday_names]
 
             conn.close()
 
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error generating analytics: {e}")
 
         return {
-            "total_boardings_today": total_boardings_today,
-            "total_alightings_today": total_alightings_today,
+            "total_boardings": total_boardings,
+            "average_occupancy": average_occupancy,
             "peak_hour": peak_hour,
             "most_popular_stop": most_popular_stop,
-            "average_occupancy": average_occupancy
+            "adoption_data": adoption_data,
+            "peak_hours_data": peak_hours_data,
+            "stop_popularity_data": stop_popularity_data,
+            "day_of_week_data": day_of_week_data
         }
 
-    def export_data(self, start_date=None, end_date=None, direction=None, stop_location=None):
+    def export_data(self, start_date=None, end_date=None, start_time=None, end_time=None,
+                direction=None, stop_location=None):
         """
         Queries passenger events from SQLite with optional filters
-        for date range, direction and stop location. Formats data
-        as CSV string for download by administrator.
+        for date range, time-of-day range, direction and stop location.
+        Time filters apply to each day in the date range so admins can
+        isolate patterns like morning rush across multiple days.
+        Formats data as CSV string for download by administrator.
         Logs success when data is exported.
         Returns CSV formatted string of filtered passenger events.
         """
-        import sqlite3
-        import csv
-        import io
 
         output = io.StringIO()
         writer = csv.writer(output)
@@ -456,7 +503,15 @@ class FlaskDashboard:
 
             if end_date:
                 query += " AND timestamp <= ?"
-                params.append(end_date)
+                params.append(end_date + " 23:59:59")
+
+            if start_time:
+                query += " AND strftime('%H:%M', timestamp) >= ?"
+                params.append(start_time)
+
+            if end_time:
+                query += " AND strftime('%H:%M', timestamp) <= ?"
+                params.append(end_time)
 
             if direction:
                 query += " AND direction = ?"
@@ -632,9 +687,37 @@ class FlaskDashboard:
                 return redirect(url_for("login"))
             data = self.render_dashboard()
             analytics = self.generate_analytics()
+            # get list of stops for export dropdown and total_capacity
+            # for the Settings tab display-only fields
+            import sqlite3, json
+            stops = []
+            total_capacity = 20
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
+                row = cursor.fetchone()
+                if row:
+                    stops = json.loads(row[0])
+                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
+                row = cursor.fetchone()
+                if row:
+                    total_capacity = int(row[0])
+                conn.close()
+            except Exception:
+                pass
+            # fallback to default stops if not set in system_state
+            if not stops:
+                stops = [
+                    "Western Gate", "CEDAT", "CONAS", "Main Library",
+                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
+                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
+                ]
             return render_template("dashboard.html",
-                                 data=data,
-                                 analytics=analytics)
+                                data=data,
+                                analytics=analytics,
+                                stops=stops,
+                                total_capacity=total_capacity)
 
         @app.route("/export")
         def export():
@@ -643,11 +726,15 @@ class FlaskDashboard:
             from flask import Response
             start_date = request.args.get("start_date")
             end_date = request.args.get("end_date")
+            start_time = request.args.get("start_time")
+            end_time = request.args.get("end_time")
             direction = request.args.get("direction")
             stop_location = request.args.get("stop_location")
             csv_data = self.export_data(
                 start_date=start_date,
                 end_date=end_date,
+                start_time=start_time,
+                end_time=end_time,
                 direction=direction,
                 stop_location=stop_location
             )
@@ -659,11 +746,155 @@ class FlaskDashboard:
 
         @app.route("/reset_count", methods=["POST"])
         def reset_count():
+            """
+            Emergency reset of the live passenger count to zero.
+
+            Writes current_count=0 and available_seats=total_capacity
+            back to SQLite system_state. Also syncs the new state to
+            Firebase so the mobile app reflects the reset immediately.
+
+            Logs a diagnostic entry of severity 'warning' because a
+            manual count reset is an operational override worth
+            keeping in the audit trail — operators should be able to
+            look back later and see when/why a reset happened.
+
+            Historical tables (passenger_events, diagnostic_log) are
+            never wiped — those are sacred records.
+            """
             if "logged_in" not in session:
                 return redirect(url_for("login"))
             from flask import jsonify
-            logger.info("Count reset by administrator")
-            return jsonify({"status": "success", "message": "Count reset successfully"})
+            import sqlite3
+
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+
+                # read total_capacity to restore available_seats
+                cursor.execute(
+                    "SELECT value FROM system_state "
+                    "WHERE key='total_capacity'"
+                )
+                row = cursor.fetchone()
+                total_capacity = int(row[0]) if row else 20
+
+                # write fresh count + seats
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('current_count', '0')
+                    """
+                )
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('available_seats', ?)
+                    """,
+                    (str(total_capacity),),
+                )
+                conn.commit()
+                conn.close()
+
+                # write a diagnostic audit log via DataLogger so the
+                # reset shows up in the Recent Diagnostic Logs panel
+                try:
+                    from data_logger import DataLogger
+                    import os as _os
+                    data_logger = DataLogger(
+                        shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+                    )
+                    data_logger.initialize()
+                    data_logger.log_diagnostic({
+                        "log_type": "warning",
+                        "message": (
+                            "Manual count reset performed by administrator"
+                        ),
+                    })
+                except Exception as audit_err:
+                    logger.error(
+                        f"Failed to log reset audit entry: {audit_err}"
+                    )
+
+                # push new occupancy to Firebase so mobile app updates.
+                # read current_stop from SQLite and compute next_stop
+                # from the designated_stops list so Firebase reflects
+                # the shuttle's actual location, not a "Unknown" stub.
+                try:
+                    import json as _json
+                    conn = sqlite3.connect("local_database/apcoms.db")
+                    cursor = conn.cursor()
+
+                    cursor.execute(
+                        "SELECT value FROM system_state "
+                        "WHERE key='current_stop'"
+                    )
+                    row = cursor.fetchone()
+                    current_stop = row[0] if row else "Western Gate"
+
+                    cursor.execute(
+                        "SELECT value FROM system_state "
+                        "WHERE key='current_stop_index'"
+                    )
+                    row = cursor.fetchone()
+                    current_stop_index = int(row[0]) if row else 0
+
+                    cursor.execute(
+                        "SELECT value FROM system_state "
+                        "WHERE key='designated_stops'"
+                    )
+                    row = cursor.fetchone()
+                    stops = []
+                    if row:
+                        try:
+                            stops = _json.loads(row[0])
+                        except Exception:
+                            pass
+                    conn.close()
+
+                    if not stops:
+                        stops = [
+                            "Western Gate", "CEDAT", "CONAS",
+                            "Main Library", "Africa Hall",
+                            "Swimming Pool", "Mitchel Hall",
+                            "COCIS", "Complex Hall", "CEES",
+                            "Lumumba Hall",
+                        ]
+
+                    next_index = (current_stop_index + 1) % len(stops)
+                    next_stop = stops[next_index]
+
+                    from firebase_sync import FirebaseSyncComponent
+                    import os as _os
+                    firebase = FirebaseSyncComponent(
+                        shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+                    )
+                    firebase.initialize()
+                    firebase.sync_to_firebase({
+                        "passenger_count": 0,
+                        "available_seats": total_capacity,
+                        "occupancy_status": "Available",
+                        "current_stop": current_stop,
+                        "next_stop": next_stop,
+                    })
+                except Exception as fb_err:
+                    logger.error(
+                        f"Failed to push reset to Firebase: {fb_err}"
+                    )
+
+                logger.info(
+                    "Count reset to zero by administrator "
+                    f"(available_seats={total_capacity})"
+                )
+                return jsonify({
+                    "status": "success",
+                    "message": "Count reset successfully",
+                })
+            except Exception as e:
+                logger.error(f"Reset count failed: {e}")
+                return jsonify({
+                    "status": "error",
+                    "message": str(e),
+                }), 500
 
         @app.route("/setup_shuttle", methods=["POST"])
         def setup_shuttle_route():
@@ -689,3 +920,202 @@ class FlaskDashboard:
                 return __import__("flask").jsonify({"error": "unauthorized"}), 401
             data = self.render_dashboard()
             return __import__("flask").jsonify(data)
+
+        @app.route("/api/analytics")
+        def api_analytics():
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import request, jsonify
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+            start_time = request.args.get("start_time")
+            end_time = request.args.get("end_time")
+            analytics = self.generate_analytics(
+                start_date=start_date,
+                end_date=end_date,
+                start_time=start_time,
+                end_time=end_time
+                )
+            return jsonify(analytics)
+
+        @app.route("/api/passenger_events")
+        def api_passenger_events():
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import request, jsonify
+            import sqlite3
+
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+            start_time = request.args.get("start_time")
+            end_time = request.args.get("end_time")
+            direction = request.args.get("direction")
+            stop_location = request.args.get("stop_location")
+
+            events = []
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+
+                query = """
+                    SELECT event_id, shuttle_id, timestamp, direction,
+                        passenger_count, available_seats, stop_location
+                    FROM passenger_events WHERE 1=1
+                """
+                params = []
+
+                if start_date:
+                    query += " AND timestamp >= ?"
+                    params.append(start_date)
+                if end_date:
+                    query += " AND timestamp <= ?"
+                    params.append(end_date + " 23:59:59")
+                if start_time:
+                    query += " AND strftime('%H:%M', timestamp) >= ?"
+                    params.append(start_time)
+                if end_time:
+                    query += " AND strftime('%H:%M', timestamp) <= ?"
+                    params.append(end_time)
+                if direction:
+                    query += " AND direction = ?"
+                    params.append(direction)
+                if stop_location:
+                    query += " AND stop_location = ?"
+                    params.append(stop_location)
+
+                query += " ORDER BY timestamp DESC"
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                for row in rows:
+                    events.append({
+                        "event_id": row[0],
+                        "shuttle_id": row[1],
+                        "timestamp": row[2],
+                        "direction": row[3],
+                        "passenger_count": row[4],
+                        "available_seats": row[5],
+                        "stop_location": row[6]
+                    })
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error fetching passenger events: {e}")
+
+            return jsonify({"events": events, "total": len(events)})
+
+        @app.route("/api/all_bookings")
+        def api_all_bookings():
+            """
+            Lists every booking belonging to this shuttle for the
+            Live Bookings demo tab. Sorted newest-first. Returns
+            an empty list if Firebase is unreachable so the tab
+            renders gracefully even during outages.
+
+            This route powers a DEMO-ONLY view of bookings and is
+            not part of the production dashboard intended for
+            shuttle operators. It exists to give a panel viewer
+            an at-a-glance window into the booking flow during
+            the live demo without needing to open Firebase
+            console mid-presentation.
+            """
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import jsonify
+            from booking_dashboard_service import BookingDashboardService
+
+            service = BookingDashboardService()
+            bookings = service.list_all_bookings()
+            return jsonify({"bookings": bookings})
+
+        @app.route("/api/booking_stats")
+        def api_booking_stats():
+            """
+            Live booking statistics for the Monitoring tab cards.
+            Returns four booking-activity counts for the shuttle's
+            current stop:
+
+              - pickups_expected: count of reserved bookings at
+                the current stop (passengers about to scan)
+              - boarded_from_here: count of active bookings with
+                pickup_stop matching the current stop (passengers
+                who have already scanned and boarded)
+              - alightings_expected: count of active bookings with
+                destination_stop matching the current stop
+                (passengers currently onboard expecting to alight)
+              - alighted_here: count of completed bookings with
+                destination_stop matching the current stop,
+                completed during this visit (passengers who have
+                actually disembarked at this stop on the current
+                shuttle arrival)
+
+            Current stop is read from SQLite system_state where
+            it is kept in sync by main.py and the orchestrator.
+            Defaults to 'Western Gate' if the shuttle hasn't been
+            initialised yet so the dashboard never crashes on a
+            fresh deployment.
+            """
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import jsonify
+            import sqlite3
+            from booking_dashboard_service import BookingDashboardService
+
+            current_stop = "Western Gate"
+            try:
+                conn = sqlite3.connect("local_database/apcoms.db")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT value FROM system_state WHERE key='current_stop'"
+                )
+                row = cursor.fetchone()
+                if row:
+                    current_stop = row[0]
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error reading current_stop: {e}")
+
+            service = BookingDashboardService()
+            return jsonify({
+                "current_stop": current_stop,
+                "pickups_expected": service.get_pickups_expected(current_stop),
+                "boarded_from_here": service.get_boarded_from_stop(current_stop),
+                "alightings_expected": service.get_alightings_expected(current_stop),
+                "alighted_here": service.get_alighted_at_stop(current_stop),
+            })
+
+        @app.route("/api/booking_analytics")
+        def api_booking_analytics():
+            """
+            Aggregate booking analytics for the Analytics tab charts:
+              - funnel: cumulative booking lifecycle counts
+                (total_booked, boarded, completed, cancelled)
+              - no_show_rates: per-stop list of total bookings,
+                no-show counts, and no-show rate percentage
+
+            Both accept optional start_date and end_date query params
+            (YYYY-MM-DD format) which filter bookings by created_at.
+            Without filters, all bookings since deployment are counted.
+
+            Both come from the BookingDashboardService which reads
+            Firebase directly. The dashboard is online by definition
+            so no caching layer is needed for these queries.
+            """
+            if "logged_in" not in session:
+                return __import__("flask").jsonify({"error": "unauthorized"}), 401
+            from flask import jsonify, request
+            from booking_dashboard_service import BookingDashboardService
+
+            start_date = request.args.get("start_date")
+            end_date = request.args.get("end_date")
+
+            service = BookingDashboardService()
+            return jsonify({
+                "funnel": service.get_booking_funnel(
+                    start_date=start_date, end_date=end_date
+                ),
+                "no_show_rates": service.get_no_show_rate_by_stop(
+                    start_date=start_date, end_date=end_date
+                ),
+            })
+
+

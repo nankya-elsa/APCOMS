@@ -26,9 +26,38 @@ desktop.ini
 counting_module/data/*.mp4
 counting_module/data/*.avi
 counting_module/data/*.mov
+counting_module/data/scenarios/*.mp4
+
+# Manual verification scripts (kept locally for debugging)
+counting_module/verify_completion.py
 
 # AI model files
 counting_module/models/*.pt
 
 # Local database
 counting_module/local_database/*.db
+
+# to-do in docs
+# counting_module/docs/*.py
+
+# Fine-tuning artifacts — heavy files, not version-controlled
+counting_module/fine_tuning/raw_videos/*
+!counting_module/fine_tuning/raw_videos/.gitkeep
+counting_module/fine_tuning/extracted_frames/*
+!counting_module/fine_tuning/extracted_frames/.gitkeep
+counting_module/fine_tuning/labeled/*
+!counting_module/fine_tuning/labeled/.gitkeep
+counting_module/fine_tuning/dataset/images/train/*
+!counting_module/fine_tuning/dataset/images/train/.gitkeep
+counting_module/fine_tuning/dataset/images/val/*
+!counting_module/fine_tuning/dataset/images/val/.gitkeep
+counting_module/fine_tuning/dataset/images/test/*
+!counting_module/fine_tuning/dataset/images/test/.gitkeep
+counting_module/fine_tuning/dataset/labels/train/*
+!counting_module/fine_tuning/dataset/labels/train/.gitkeep
+counting_module/fine_tuning/dataset/labels/val/*
+!counting_module/fine_tuning/dataset/labels/val/.gitkeep
+counting_module/fine_tuning/dataset/labels/test/*
+!counting_module/fine_tuning/dataset/labels/test/.gitkeep
+counting_module/fine_tuning/runs/*
+!counting_module/fine_tuning/runs/.gitkeep
