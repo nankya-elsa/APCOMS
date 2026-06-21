@@ -13,6 +13,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import '../services/shuttle_route_geometry_service.dart';
 import '../models/shuttle_route_geometry.dart';
 import '../services/device_location_service.dart';
+import 'dashboard_screen.dart';
 
 class BookingScreen extends StatefulWidget {
   const BookingScreen({
@@ -85,8 +86,9 @@ class _BookingScreenState extends State<BookingScreen> {
           return Stack(
             children: [
               StreamBuilder<ShuttleRouteGeometry?>(
-                stream: ShuttleRouteGeometryService()
-                    .watchRoute(shuttleKey: widget.trackedShuttleKey),
+                stream: ShuttleRouteGeometryService().watchRoute(
+                  shuttleKey: widget.trackedShuttleKey,
+                ),
                 builder: (context, routeSnap) {
                   final route = routeSnap.data;
                   gmaps.LatLng? pickupPoint;
@@ -94,7 +96,8 @@ class _BookingScreenState extends State<BookingScreen> {
                   if (pickupIndex != null) {
                     final stopName = ShuttleRoute.stops[pickupIndex];
                     final stop = route?.findStopByName(stopName);
-                    if (stop != null) pickupPoint = gmaps.LatLng(stop.lat, stop.lng);
+                    if (stop != null)
+                      pickupPoint = gmaps.LatLng(stop.lat, stop.lng);
                   }
 
                   if (_useDeviceLocation) {
@@ -106,6 +109,14 @@ class _BookingScreenState extends State<BookingScreen> {
                           shuttleKey: widget.trackedShuttleKey,
                           height: 380,
                           targetLocation: devicePoint ?? pickupPoint,
+                          onEtaToTarget: (mins) {
+                            if (!mounted) return;
+                            setState(() => _minutesToPickup = mins);
+                          },
+                          onEtaToNextStop: (mins) {
+                            if (!mounted) return;
+                            setState(() => _minutesToCurrentStop = mins);
+                          },
                         );
                       },
                     );
@@ -115,6 +126,14 @@ class _BookingScreenState extends State<BookingScreen> {
                     shuttleKey: widget.trackedShuttleKey,
                     height: 380,
                     targetLocation: pickupPoint,
+                    onEtaToTarget: (mins) {
+                      if (!mounted) return;
+                      setState(() => _minutesToPickup = mins);
+                    },
+                    onEtaToNextStop: (mins) {
+                      if (!mounted) return;
+                      setState(() => _minutesToCurrentStop = mins);
+                    },
                   );
                 },
               ),
@@ -137,7 +156,8 @@ class _BookingScreenState extends State<BookingScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_minutesToCurrentStop != null || _minutesToPickup != null)
+                        if (_minutesToCurrentStop != null ||
+                            _minutesToPickup != null)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 12),
                             child: Row(
@@ -161,9 +181,9 @@ class _BookingScreenState extends State<BookingScreen> {
                                       ),
                                       child: Text(
                                         'Bus ≈ ${_minutesToCurrentStop} min to current stop',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
                                       ),
                                     ),
                                   ),
@@ -187,9 +207,9 @@ class _BookingScreenState extends State<BookingScreen> {
                                       ),
                                       child: Text(
                                         'Bus ≈ ${_minutesToPickup} min to your pickup',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
                                       ),
                                     ),
                                   ),
@@ -204,7 +224,8 @@ class _BookingScreenState extends State<BookingScreen> {
                             const SizedBox(width: 8),
                             Switch(
                               value: _useDeviceLocation,
-                              onChanged: (v) => setState(() => _useDeviceLocation = v),
+                              onChanged: (v) =>
+                                  setState(() => _useDeviceLocation = v),
                             ),
                           ],
                         ),
@@ -282,10 +303,7 @@ class _BookingScreenState extends State<BookingScreen> {
     }
 
     final stops = ShuttleRoute.destinationChoicesForPickup(pickupIndex);
-    final selected = await _pickStop(
-      context,
-      stops: stops,
-    );
+    final selected = await _pickStop(context, stops: stops);
     if (!mounted || selected == null) return;
 
     // Map the selected stop name back to its absolute index in the master
@@ -361,6 +379,14 @@ class _BookingScreenState extends State<BookingScreen> {
         context: context,
         builder: (context) => _BookingQrDialog(receipt: receipt),
       );
+
+      // After the user dismisses the QR dialog, navigate back to the
+      // app dashboard (home) instead of showing the booking history popup.
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        (route) => false,
+      );
     } catch (e) {
       if (!mounted) return;
       _showSnack(context, 'Booking failed. ${e.toString()}');
@@ -412,10 +438,7 @@ class _BookingScreenState extends State<BookingScreen> {
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        content: Text(
-          message,
-          textAlign: TextAlign.center,
-        ),
+        content: Text(message, textAlign: TextAlign.center),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -497,8 +520,8 @@ class _BookingHistoryTile extends StatelessWidget {
     final statusColor = statusLower == 'reserved'
         ? scheme.primary
         : statusLower == 'active'
-            ? const Color(0xFFFFA726)
-            : scheme.error;
+        ? const Color(0xFFFFA726)
+        : scheme.error;
 
     return Container(
       padding: const EdgeInsets.all(12),
