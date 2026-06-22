@@ -164,6 +164,14 @@ class FlaskDashboard:
             "most_active_stop": "N/A"
         }
 
+        # Initialize service-hour defaults BEFORE the try block so
+        # they're guaranteed to be bound even if the SQLite query
+        # path inside the try fails. Without these, an exception in
+        # the try silently passes but day_start and day_end are
+        # never bound, causing UnboundLocalError when accessed below.
+        day_start = "06:00"
+        day_end = "24:00"
+
         try:
             conn = sqlite3.connect("local_database/apcoms.db")
             cursor = conn.cursor()
