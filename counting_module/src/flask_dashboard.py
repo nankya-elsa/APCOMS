@@ -97,18 +97,30 @@ class FlaskDashboard:
         """
         from service_day_manager import ServiceDayManager
         from firebase_sync import FirebaseSyncComponent
+        from firebase_admin import db
         import os as _os
 
         try:
+            shuttle_id = _os.getenv("SHUTTLE_ID", "shuttle_001")
+
             # firebase_sync wired so the service-day reset also
             # propagates to Firebase, not just SQLite.
-            firebase_sync = FirebaseSyncComponent(
-                shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
-            )
+            firebase_sync = FirebaseSyncComponent(shuttle_id=shuttle_id)
             firebase_sync.initialize()
+
+            # bookings_ref + shuttle_id wired so that when the
+            # dashboard wins the daily reset race (which it
+            # reliably does, since it has been running all night
+            # while the orchestrator is asleep), cancel_stale_bookings
+            # has the Firebase reference it needs to actually clean
+            # up yesterday's reserved/active bookings. Without these
+            # args the stale-cancel step silently no-ops and stale
+            # bookings survive into today.
             manager = ServiceDayManager(
                 db_path="local_database/apcoms.db",
                 firebase_sync=firebase_sync,
+                bookings_ref=db.reference("bookings"),
+                shuttle_id=shuttle_id,
             )
             reset_date = manager.reset_if_needed()
             if reset_date:
@@ -151,6 +163,14 @@ class FlaskDashboard:
             "peak_hour": "N/A",
             "most_active_stop": "N/A"
         }
+
+        # Initialize service-hour defaults BEFORE the try block so
+        # they're guaranteed to be bound even if the SQLite query
+        # path inside the try fails. Without these, an exception in
+        # the try silently passes but day_start and day_end are
+        # never bound, causing UnboundLocalError when accessed below.
+        day_start = "06:00"
+        day_end = "24:00"
 
         try:
             conn = sqlite3.connect("local_database/apcoms.db")

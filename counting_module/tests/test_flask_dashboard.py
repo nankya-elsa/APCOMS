@@ -1,6 +1,7 @@
 import pytest
 import os
 import sys
+from unittest.mock import patch, MagicMock
 
 NGROK_AVAILABLE = os.getenv("NGROK_AUTH_TOKEN") is not None
 
@@ -393,4 +394,74 @@ class TestAlertHandling:
         alert = {"type": "performance_alert"}
         result = dashboard.handle_alert(alert)
         assert result == "Performance Degradation - Check system resources"
+
+
+class TestEndOfDayResetWiring:
+    """
+    Tests that check_end_of_day wires bookings_ref and shuttle_id
+    into the ServiceDayManager so cancel_stale_bookings() actually
+    runs when the dashboard is the process that triggers the
+    daily reset.
+
+    The dashboard is always-on (24/7) while the orchestrator only
+    runs during service hours. reset_if_needed() is idempotent
+    across processes -- whoever wins the race performs the reset
+    and marks today as done; the loser skips. The dashboard
+    reliably wins because it has been running all night. So if
+    the dashboard's ServiceDayManager doesn't carry the wiring
+    needed for stale-booking cleanup, that cleanup never happens
+    in production, and yesterday's reserved/active bookings
+    survive into today.
+    """
+
+    @patch("flask_dashboard.FlaskDashboard.check_end_of_day", autospec=True)
+    def test_render_dashboard_still_calls_check_end_of_day(
+        self, mock_check
+    ):
+        """
+        Sanity check that render_dashboard still triggers
+        check_end_of_day on every load. Protects the call-site
+        we depend on.
+        """
+        dashboard = FlaskDashboard()
+        try:
+            dashboard.render_dashboard()
+        except Exception:
+            pass  # we only care that check_end_of_day was called
+        mock_check.assert_called_once()
+
+    @patch("firebase_admin.db.reference")
+    @patch("service_day_manager.ServiceDayManager")
+    @patch("firebase_sync.FirebaseSyncComponent")
+    def test_check_end_of_day_passes_bookings_ref_and_shuttle_id(
+        self,
+        mock_firebase_sync_class,
+        mock_manager_class,
+        mock_db_reference,
+    ):
+        """
+        ServiceDayManager must be constructed with bookings_ref
+        pointed at the live Firebase /bookings node AND shuttle_id
+        matching the configured shuttle. Without these args,
+        cancel_stale_bookings() is a silent no-op and stale
+        bookings from yesterday survive into today.
+        """
+        import os
+        os.environ["SHUTTLE_ID"] = "shuttle_001"
+        mock_db_reference.return_value = "BOOKINGS_REF_SENTINEL"
+
+        dashboard = FlaskDashboard()
+        dashboard.check_end_of_day()
+
+        mock_manager_class.assert_called_once()
+        kwargs = mock_manager_class.call_args.kwargs
+        assert kwargs.get("bookings_ref") == "BOOKINGS_REF_SENTINEL", (
+            "ServiceDayManager must receive bookings_ref so "
+            "cancel_stale_bookings can run during the reset"
+        )
+        assert kwargs.get("shuttle_id") == "shuttle_001", (
+            "ServiceDayManager must receive shuttle_id so it "
+            "knows which shuttle's bookings to clean up"
+        )
+        mock_db_reference.assert_called_with("bookings")
 
