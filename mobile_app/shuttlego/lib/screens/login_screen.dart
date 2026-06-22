@@ -70,14 +70,9 @@ class _LoginScreenState extends State<LoginScreen> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Too many attempts'),
-          content: Text(
-            'Too many failed login attempts. Try again in ${remain}s.',
-          ),
+          content: Text('Too many failed login attempts. Try again in ${remain}s.'),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
           ],
         ),
       );
@@ -98,45 +93,17 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on Exception catch (e) {
       if (!mounted) return;
-
-      // If the error indicates the user doesn't exist, show a top SnackBar
-      if (e is FirebaseAuthException && e.code == 'user-not-found') {
-        _failedAttempts++;
-        if (_failedAttempts >= _maxAttempts) {
-          _lockoutUntil = DateTime.now().add(
-            const Duration(seconds: _lockoutSeconds),
-          );
-        }
-        final messenger = ScaffoldMessenger.of(context);
-        // Log full exception to console for debugging
-        // Show code in the user-visible message to help diagnose environment issues.
-        debugPrint('Login error: user-not-found for ${_emailController.text}');
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('No account found for this email. (user-not-found)'),
-            behavior: SnackBarBehavior.floating,
-            margin: EdgeInsets.fromLTRB(16, 16, 16, 0),
-          ),
-        );
-        return;
-      }
-
-      // Generic behavior for other errors.
+      // Increment failed attempts and trigger lockout if limit reached.
       _failedAttempts++;
       if (_failedAttempts >= _maxAttempts) {
-        _lockoutUntil = DateTime.now().add(
-          const Duration(seconds: _lockoutSeconds),
-        );
+        _lockoutUntil = DateTime.now().add(const Duration(seconds: _lockoutSeconds));
       }
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           content: Text(_friendlyErrorMessage(e), textAlign: TextAlign.center),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
           ],
         ),
       );
@@ -287,116 +254,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                             foregroundColor: Colors.black54,
                           ),
-                          onPressed: () async {
-                            final emailController = TextEditingController(
-                              text: _emailController.text,
-                            );
-
-                            final result = await showDialog<String?>(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Reset password'),
-                                content: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      'Enter the email for your account. We will send a password reset link to this address.',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    TextField(
-                                      controller: emailController,
-                                      keyboardType: TextInputType.emailAddress,
-                                      decoration: const InputDecoration(
-                                        hintText: 'you@example.com',
-                                        isDense: true,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(),
-                                    child: const Text('Cancel'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () {
-                                      final email = emailController.text.trim();
-                                      final looksValid = RegExp(
-                                        r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                                      ).hasMatch(email);
-                                      if (email.isEmpty || !looksValid) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              'Enter a valid email address.',
-                                            ),
-                                          ),
-                                        );
-                                        return;
-                                      }
-                                      Navigator.of(context).pop(email);
-                                    },
-                                    child: const Text('Send'),
-                                  ),
-                                ],
-                              ),
-                            );
-
-                            if (result == null) return;
-
-                            final email = result.trim();
-                            final messenger = ScaffoldMessenger.of(context);
-                            try {
-                              await const AuthService().sendPasswordResetEmail(
-                                email: email,
-                              );
-                              if (!mounted) return;
-                              messenger.showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'We sent you a password reset email. Check your inbox.',
-                                  ),
-                                  behavior: SnackBarBehavior.floating,
-                                  margin: EdgeInsets.fromLTRB(16, 16, 16, 0),
-                                ),
-                              );
-                            } on FirebaseAuthException catch (e) {
-                              if (!mounted) return;
-                              debugPrint(
-                                'Password reset error: ${e.code} ${e.message}',
-                              );
-                              final base = (e.code == 'user-not-found')
-                                  ? 'No account found for that email.'
-                                  : (e.message ??
-                                        'Failed to send reset email.');
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text('$base (${e.code})'),
-                                  behavior: SnackBarBehavior.floating,
-                                  margin: const EdgeInsets.fromLTRB(
-                                    16,
-                                    16,
-                                    16,
-                                    0,
-                                  ),
-                                ),
-                              );
-                            } catch (_) {
-                              if (!mounted) return;
-                              messenger.showSnackBar(
-                                const SnackBar(
-                                  content: Text('Failed to send reset email.'),
-                                  behavior: SnackBarBehavior.floating,
-                                  margin: EdgeInsets.fromLTRB(16, 16, 16, 0),
-                                ),
-                              );
-                            }
+                          onPressed: () {
+                            // TODO: Forgot password flow.
                           },
                           child: const Text('Forgot Password?'),
                         ),

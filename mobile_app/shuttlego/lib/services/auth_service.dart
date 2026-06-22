@@ -28,11 +28,6 @@ class AuthService {
 
   Future<void> signOut() => auth.signOut();
 
-  /// Sends a password reset email to the given address using Firebase Auth.
-  Future<void> sendPasswordResetEmail({required String email}) {
-    return auth.sendPasswordResetEmail(email: email.trim());
-  }
-
   /// Fetches a profile once from `users/{uid}`.
   Future<UserProfile?> getUserProfile(String uid) async {
     final snapshot = await _usersRef.child(uid).get();
@@ -131,14 +126,10 @@ class AuthService {
     try {
       final current = auth.currentUser;
       if (current != null) {
-        if (email != null &&
-            email.trim().isNotEmpty &&
-            current.email != email.trim()) {
+        if (email != null && email.trim().isNotEmpty && current.email != email.trim()) {
           await current.updateEmail(email.trim());
         }
-        if (fullName != null &&
-            fullName.trim().isNotEmpty &&
-            current.displayName != fullName.trim()) {
+        if (fullName != null && fullName.trim().isNotEmpty && current.displayName != fullName.trim()) {
           await current.updateDisplayName(fullName.trim());
         }
       }
