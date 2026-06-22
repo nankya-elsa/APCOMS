@@ -108,6 +108,7 @@ class _BookingScreenState extends State<BookingScreen> {
                         return ShuttleLocationMap(
                           shuttleKey: widget.trackedShuttleKey,
                           height: 380,
+                          forceDisableOnAndroid: true,
                           targetLocation: devicePoint ?? pickupPoint,
                           onEtaToTarget: (mins) {
                             if (!mounted) return;
@@ -125,6 +126,7 @@ class _BookingScreenState extends State<BookingScreen> {
                   return ShuttleLocationMap(
                     shuttleKey: widget.trackedShuttleKey,
                     height: 380,
+                    forceDisableOnAndroid: true,
                     targetLocation: pickupPoint,
                     onEtaToTarget: (mins) {
                       if (!mounted) return;

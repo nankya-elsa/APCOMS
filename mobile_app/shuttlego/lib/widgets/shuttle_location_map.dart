@@ -1,6 +1,7 @@
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart' as ll;
 import 'dart:ui' as ui;
@@ -22,6 +23,7 @@ class ShuttleLocationMap extends StatelessWidget {
     this.targetLocation,
     this.onEtaToTarget,
     this.onEtaToNextStop,
+    this.forceDisableOnAndroid = false,
   });
 
   final String shuttleKey;
@@ -31,6 +33,10 @@ class ShuttleLocationMap extends StatelessWidget {
   final gmaps.LatLng? targetLocation;
   final ValueChanged<int?>? onEtaToTarget;
   final ValueChanged<int?>? onEtaToNextStop;
+  // Debug: when true the native Android map is disabled and a placeholder
+  // is shown. Use this to confirm whether the platform map view is
+  // intercepting touch events and preventing UI interaction.
+  final bool forceDisableOnAndroid;
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +56,33 @@ class ShuttleLocationMap extends StatelessWidget {
 
     final locSvc = locationService ?? ShuttleLocationService();
     final routeSvc = routeService ?? ShuttleRouteGeometryService();
+
+    // If requested, and running on Android (not web), render a lightweight
+    // placeholder instead of the native platform view. This helps determine
+    // whether the platform map is blocking touch/gesture interaction.
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        forceDisableOnAndroid) {
+      return SizedBox(
+        height: height,
+        width: double.infinity,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: ColoredBox(
+            color: scheme.surface,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'Maps disabled (debug).',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return SizedBox(
       height: height,
@@ -169,35 +202,63 @@ class ShuttleLocationMap extends StatelessWidget {
                                   ));
                         final currentStopPoint = currentStopStop == null
                             ? null
-                            : gmaps.LatLng(currentStopStop.lat, currentStopStop.lng);
+                            : gmaps.LatLng(
+                                currentStopStop.lat,
+                                currentStopStop.lng,
+                              );
 
                         // Also compute ETA from bus to next stop and notify listener
                         if (busPoint != null && nextStopPoint != null) {
                           try {
                             double metersNext;
-                            final polylineForEta = route?.polyline ?? const <ll.LatLng>[];
+                            final polylineForEta =
+                                route?.polyline ?? const <ll.LatLng>[];
                             if (polylineForEta.isNotEmpty) {
-                              final startIdx = _closestPolylineIndex(polylineForEta, busPoint);
-                              final endIdx = _closestPolylineIndex(polylineForEta, nextStopPoint);
+                              final startIdx = _closestPolylineIndex(
+                                polylineForEta,
+                                busPoint,
+                              );
+                              final endIdx = _closestPolylineIndex(
+                                polylineForEta,
+                                nextStopPoint,
+                              );
                               if (startIdx != null && endIdx != null) {
-                                metersNext = _distanceAlongPolylineMeters(polylineForEta, startIdx, endIdx);
+                                metersNext = _distanceAlongPolylineMeters(
+                                  polylineForEta,
+                                  startIdx,
+                                  endIdx,
+                                );
                               } else {
                                 metersNext = ll.Distance().as(
                                   ll.LengthUnit.Meter,
-                                  ll.LatLng(busPoint.latitude, busPoint.longitude),
-                                  ll.LatLng(nextStopPoint.latitude, nextStopPoint.longitude),
+                                  ll.LatLng(
+                                    busPoint.latitude,
+                                    busPoint.longitude,
+                                  ),
+                                  ll.LatLng(
+                                    nextStopPoint.latitude,
+                                    nextStopPoint.longitude,
+                                  ),
                                 );
                               }
                             } else {
                               metersNext = ll.Distance().as(
                                 ll.LengthUnit.Meter,
-                                ll.LatLng(busPoint.latitude, busPoint.longitude),
-                                ll.LatLng(nextStopPoint.latitude, nextStopPoint.longitude),
+                                ll.LatLng(
+                                  busPoint.latitude,
+                                  busPoint.longitude,
+                                ),
+                                ll.LatLng(
+                                  nextStopPoint.latitude,
+                                  nextStopPoint.longitude,
+                                ),
                               );
                             }
                             const speedMpsEta = 8.0;
-                            final minsNext = (metersNext / speedMpsEta / 60).ceil();
-                            if (onEtaToNextStop != null) onEtaToNextStop!(minsNext);
+                            final minsNext = (metersNext / speedMpsEta / 60)
+                                .ceil();
+                            if (onEtaToNextStop != null)
+                              onEtaToNextStop!(minsNext);
                           } catch (_) {}
                         }
 
@@ -216,11 +277,12 @@ class ShuttleLocationMap extends StatelessWidget {
                             .toList(growable: false);
 
                         final highlightedOrigin = busPoint ?? currentStopPoint;
-                        final highlightedPoints = _computeHighlightedRoutePoints(
-                          route: route,
-                          busPoint: highlightedOrigin,
-                          nextStopPoint: nextStopPoint,
-                        );
+                        final highlightedPoints =
+                            _computeHighlightedRoutePoints(
+                              route: route,
+                              busPoint: highlightedOrigin,
+                              nextStopPoint: nextStopPoint,
+                            );
 
                         final polylines = <gmaps.Polyline>{
                           if (routePoints.isNotEmpty)
@@ -298,9 +360,11 @@ class ShuttleLocationMap extends StatelessWidget {
                                         'next_stop',
                                       ),
                                       position: nextStopPoint,
-                                      icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
-                                        gmaps.BitmapDescriptor.hueGreen,
-                                      ),
+                                      icon:
+                                          gmaps
+                                              .BitmapDescriptor.defaultMarkerWithHue(
+                                            gmaps.BitmapDescriptor.hueGreen,
+                                          ),
                                       infoWindow: gmaps.InfoWindow(
                                         title: 'Next stop',
                                         snippet: nextStopName,
@@ -308,8 +372,8 @@ class ShuttleLocationMap extends StatelessWidget {
                                     ),
                                 };
 
-                                  // Remove the confusing blue "current stop" marker
-                                  // — the bus marker and next-stop marker are sufficient.
+                                // Remove the confusing blue "current stop" marker
+                                // — the bus marker and next-stop marker are sufficient.
 
                                 if (kIsWeb) {
                                   return FutureBuilder<void>(
@@ -361,28 +425,61 @@ class ShuttleLocationMap extends StatelessWidget {
                                               target: center,
                                               zoom: 16,
                                             ),
+                                        gestureRecognizers:
+                                            <
+                                              Factory<
+                                                OneSequenceGestureRecognizer
+                                              >
+                                            >{},
                                         onMapCreated: (ctrl) async {
                                           try {
                                             final points = <gmaps.LatLng>[];
-                                            if (busPoint != null) points.add(busPoint);
-                                            if (nextStopPoint != null) points.add(nextStopPoint);
-                                            if (targetLocation != null) points.add(targetLocation!);
+                                            if (busPoint != null)
+                                              points.add(busPoint);
+                                            if (nextStopPoint != null)
+                                              points.add(nextStopPoint);
+                                            if (targetLocation != null)
+                                              points.add(targetLocation!);
                                             if (points.isNotEmpty) {
-                                              var minLat = points.first.latitude;
-                                              var maxLat = points.first.latitude;
-                                              var minLng = points.first.longitude;
-                                              var maxLng = points.first.longitude;
+                                              var minLat =
+                                                  points.first.latitude;
+                                              var maxLat =
+                                                  points.first.latitude;
+                                              var minLng =
+                                                  points.first.longitude;
+                                              var maxLng =
+                                                  points.first.longitude;
                                               for (final p in points) {
-                                                minLat = p.latitude < minLat ? p.latitude : minLat;
-                                                maxLat = p.latitude > maxLat ? p.latitude : maxLat;
-                                                minLng = p.longitude < minLng ? p.longitude : minLng;
-                                                maxLng = p.longitude > maxLng ? p.longitude : maxLng;
+                                                minLat = p.latitude < minLat
+                                                    ? p.latitude
+                                                    : minLat;
+                                                maxLat = p.latitude > maxLat
+                                                    ? p.latitude
+                                                    : maxLat;
+                                                minLng = p.longitude < minLng
+                                                    ? p.longitude
+                                                    : minLng;
+                                                maxLng = p.longitude > maxLng
+                                                    ? p.longitude
+                                                    : maxLng;
                                               }
                                               final bounds = gmaps.LatLngBounds(
-                                                southwest: gmaps.LatLng(minLat, minLng),
-                                                northeast: gmaps.LatLng(maxLat, maxLng),
+                                                southwest: gmaps.LatLng(
+                                                  minLat,
+                                                  minLng,
+                                                ),
+                                                northeast: gmaps.LatLng(
+                                                  maxLat,
+                                                  maxLng,
+                                                ),
                                               );
-                                              await ctrl.moveCamera(gmaps.CameraUpdate.newLatLngBounds(bounds, 60));
+                                              await ctrl.moveCamera(
+                                                gmaps
+                                                    .CameraUpdate.newLatLngBounds(
+                                                  bounds,
+                                                  60,
+                                                ),
+                                              );
                                             }
                                           } catch (_) {}
                                         },
@@ -402,28 +499,52 @@ class ShuttleLocationMap extends StatelessWidget {
                                     target: center,
                                     zoom: 16,
                                   ),
+                                  gestureRecognizers:
+                                      <Factory<OneSequenceGestureRecognizer>>{},
                                   onMapCreated: (ctrl) async {
                                     try {
                                       final points = <gmaps.LatLng>[];
-                                      if (busPoint != null) points.add(busPoint);
-                                      if (nextStopPoint != null) points.add(nextStopPoint);
-                                      if (targetLocation != null) points.add(targetLocation!);
+                                      if (busPoint != null)
+                                        points.add(busPoint);
+                                      if (nextStopPoint != null)
+                                        points.add(nextStopPoint);
+                                      if (targetLocation != null)
+                                        points.add(targetLocation!);
                                       if (points.isNotEmpty) {
                                         var minLat = points.first.latitude;
                                         var maxLat = points.first.latitude;
                                         var minLng = points.first.longitude;
                                         var maxLng = points.first.longitude;
                                         for (final p in points) {
-                                          minLat = p.latitude < minLat ? p.latitude : minLat;
-                                          maxLat = p.latitude > maxLat ? p.latitude : maxLat;
-                                          minLng = p.longitude < minLng ? p.longitude : minLng;
-                                          maxLng = p.longitude > maxLng ? p.longitude : maxLng;
+                                          minLat = p.latitude < minLat
+                                              ? p.latitude
+                                              : minLat;
+                                          maxLat = p.latitude > maxLat
+                                              ? p.latitude
+                                              : maxLat;
+                                          minLng = p.longitude < minLng
+                                              ? p.longitude
+                                              : minLng;
+                                          maxLng = p.longitude > maxLng
+                                              ? p.longitude
+                                              : maxLng;
                                         }
                                         final bounds = gmaps.LatLngBounds(
-                                          southwest: gmaps.LatLng(minLat, minLng),
-                                          northeast: gmaps.LatLng(maxLat, maxLng),
+                                          southwest: gmaps.LatLng(
+                                            minLat,
+                                            minLng,
+                                          ),
+                                          northeast: gmaps.LatLng(
+                                            maxLat,
+                                            maxLng,
+                                          ),
                                         );
-                                        await ctrl.moveCamera(gmaps.CameraUpdate.newLatLngBounds(bounds, 60));
+                                        await ctrl.moveCamera(
+                                          gmaps.CameraUpdate.newLatLngBounds(
+                                            bounds,
+                                            60,
+                                          ),
+                                        );
                                       }
                                     } catch (_) {}
                                   },
@@ -486,25 +607,48 @@ class ShuttleLocationMap extends StatelessWidget {
                               Positioned(
                                 right: 10,
                                 top: 10,
-                                child: Builder(builder: (context) {
+                                child: Builder(
+                                  builder: (context) {
                                     final bp = busPoint;
                                     final tl = targetLocation;
-                                    if (bp == null || tl == null) return const SizedBox.shrink();
+                                    if (bp == null || tl == null)
+                                      return const SizedBox.shrink();
                                     try {
                                       double meters;
                                       // Prefer along-route distance when polyline is available.
-                                      final polyline = route?.polyline ?? const <ll.LatLng>[];
+                                      final polyline =
+                                          route?.polyline ??
+                                          const <ll.LatLng>[];
                                       if (polyline.isNotEmpty) {
-                                          final startIdx = _closestPolylineIndex(polyline, bp);
-                                          final endIdx = _closestPolylineIndex(polyline,
-                                            gmaps.LatLng(tl.latitude, tl.longitude));
-                                        if (startIdx != null && endIdx != null) {
-                                          meters = _distanceAlongPolylineMeters(polyline, startIdx, endIdx);
+                                        final startIdx = _closestPolylineIndex(
+                                          polyline,
+                                          bp,
+                                        );
+                                        final endIdx = _closestPolylineIndex(
+                                          polyline,
+                                          gmaps.LatLng(
+                                            tl.latitude,
+                                            tl.longitude,
+                                          ),
+                                        );
+                                        if (startIdx != null &&
+                                            endIdx != null) {
+                                          meters = _distanceAlongPolylineMeters(
+                                            polyline,
+                                            startIdx,
+                                            endIdx,
+                                          );
                                         } else {
                                           meters = ll.Distance().as(
                                             ll.LengthUnit.Meter,
-                                            ll.LatLng(bp.latitude, bp.longitude),
-                                            ll.LatLng(tl.latitude, tl.longitude),
+                                            ll.LatLng(
+                                              bp.latitude,
+                                              bp.longitude,
+                                            ),
+                                            ll.LatLng(
+                                              tl.latitude,
+                                              tl.longitude,
+                                            ),
                                           );
                                         }
                                       } else {
@@ -514,44 +658,53 @@ class ShuttleLocationMap extends StatelessWidget {
                                           ll.LatLng(tl.latitude, tl.longitude),
                                         );
                                       }
-                                      const speedMps = 8.0; // ~28.8 km/h estimate
-                                      final mins = (meters / speedMps / 60).ceil();
+                                      const speedMps =
+                                          8.0; // ~28.8 km/h estimate
+                                      final mins = (meters / speedMps / 60)
+                                          .ceil();
                                       // Notify listener about ETA to provided target (device / pickup)
                                       try {
-                                        if (onEtaToTarget != null) onEtaToTarget!(mins);
+                                        if (onEtaToTarget != null)
+                                          onEtaToTarget!(mins);
                                       } catch (_) {}
 
                                       return Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Color.alphaBlend(
-                                          scheme.surface.withValues(alpha: 0.92),
-                                          Colors.white,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 8,
                                         ),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: scheme.outlineVariant.withValues(
-                                            alpha: 0.35,
+                                        decoration: BoxDecoration(
+                                          color: Color.alphaBlend(
+                                            scheme.surface.withValues(
+                                              alpha: 0.92,
+                                            ),
+                                            Colors.white,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: scheme.outlineVariant
+                                                .withValues(alpha: 0.35),
                                           ),
                                         ),
-                                      ),
-                                      child: Text(
-                                        'Bus ≈ $mins min',
-                                        style: Theme.of(context).textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: scheme.onSurfaceVariant,
-                                            ),
-                                      ),
-                                    );
-                                  } catch (_) {
-                                    return const SizedBox.shrink();
-                                  }
-                                }),
+                                        child: Text(
+                                          'Bus ≈ $mins min',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: scheme.onSurfaceVariant,
+                                              ),
+                                        ),
+                                      );
+                                    } catch (_) {
+                                      return const SizedBox.shrink();
+                                    }
+                                  },
+                                ),
                               ),
-                            
+
                             if (hasErrors)
                               Positioned(
                                 left: 10,
@@ -855,7 +1008,11 @@ int? _closestPolylineIndex(List<ll.LatLng> polyline, gmaps.LatLng target) {
   return bestIdx;
 }
 
-double _distanceAlongPolylineMeters(List<ll.LatLng> polyline, int startIdx, int endIdx) {
+double _distanceAlongPolylineMeters(
+  List<ll.LatLng> polyline,
+  int startIdx,
+  int endIdx,
+) {
   final dist = ll.Distance();
   double sum = 0.0;
   if (polyline.isEmpty) return 0.0;
@@ -864,19 +1021,28 @@ double _distanceAlongPolylineMeters(List<ll.LatLng> polyline, int startIdx, int 
     for (var i = startIdx; i < endIdx; i++) {
       final a = polyline[i];
       final b = polyline[i + 1];
-      sum += dist(ll.LatLng(a.latitude, a.longitude), ll.LatLng(b.latitude, b.longitude));
+      sum += dist(
+        ll.LatLng(a.latitude, a.longitude),
+        ll.LatLng(b.latitude, b.longitude),
+      );
     }
   } else {
     // wrap-around route
     for (var i = startIdx; i < polyline.length - 1; i++) {
       final a = polyline[i];
       final b = polyline[i + 1];
-      sum += dist(ll.LatLng(a.latitude, a.longitude), ll.LatLng(b.latitude, b.longitude));
+      sum += dist(
+        ll.LatLng(a.latitude, a.longitude),
+        ll.LatLng(b.latitude, b.longitude),
+      );
     }
     for (var i = 0; i < endIdx; i++) {
       final a = polyline[i];
       final b = polyline[i + 1];
-      sum += dist(ll.LatLng(a.latitude, a.longitude), ll.LatLng(b.latitude, b.longitude));
+      sum += dist(
+        ll.LatLng(a.latitude, a.longitude),
+        ll.LatLng(b.latitude, b.longitude),
+      );
     }
   }
 
