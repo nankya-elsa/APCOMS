@@ -60,15 +60,14 @@ class DashboardHomeTab extends StatelessWidget {
                                 children: [
                                   Text(
                                     greeting,
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(color: Colors.black54),
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall?.copyWith(color: Colors.black54),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
                                     nameText,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
+                                    style: Theme.of(context).textTheme.titleMedium
                                         ?.copyWith(fontWeight: FontWeight.w700),
                                   ),
                                 ],
@@ -82,8 +81,9 @@ class DashboardHomeTab extends StatelessWidget {
                         const SizedBox(height: 14),
                         Text(
                           'Booking',
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                          style: Theme.of(
+                            context,
+                          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 8),
                         _BookingEntryCard(
@@ -119,14 +119,14 @@ class _Avatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final initial = nameFallback.isEmpty ? '?' : nameFallback.characters.first;
-    final _photo = photoUrl?.trim();
-    final hasPhoto = _photo?.isNotEmpty ?? false;
-    return CircleAvatar(
+      final _photo = photoUrl?.trim();
+      final hasPhoto = _photo?.isNotEmpty ?? false;
+      return CircleAvatar(
       radius: 22,
       backgroundColor: hasPhoto
           ? Theme.of(context).colorScheme.primaryContainer
           : Colors.amber.shade200,
-      foregroundImage: hasPhoto ? NetworkImage(_photo!) : null,
+        foregroundImage: hasPhoto ? NetworkImage(_photo!) : null,
       child: Text(
         initial.toUpperCase(),
         style: Theme.of(
@@ -187,201 +187,202 @@ class _ShuttleCard extends StatelessWidget {
         .child(trackedShuttleKey);
 
     return StreamBuilder<BookingAvailability>(
-      stream: BookingService().watchAvailability(
-        shuttleKey: trackedShuttleKey,
-        persistDerived: false,
-      ),
+      stream: BookingService().watchAvailability(shuttleKey: trackedShuttleKey, persistDerived: false),
       builder: (context, availabilitySnapshot) {
         final availability = availabilitySnapshot.data;
 
         return StreamBuilder<DatabaseEvent>(
           stream: ref.onValue,
           builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return _cardShell(context, child: const _CardLoading());
-            }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _cardShell(context, child: const _CardLoading());
+        }
 
-            if (snapshot.hasError) {
-              return _cardShell(
-                context,
-                child: Text(
-                  'Failed to load shuttle data.\n${snapshot.error}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+        if (snapshot.hasError) {
+          return _cardShell(
+            context,
+            child: Text(
+              'Failed to load shuttle data.\n${snapshot.error}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          );
+        }
+
+        final raw = snapshot.data?.snapshot.value;
+        if (raw == null) {
+          return _cardShell(
+            context,
+            child: Text(
+              'No data found at shuttles/$trackedShuttleKey.\n'
+              'Check your Realtime Database path and rules.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          );
+        }
+        final data = raw is Map ? Map<String, Object?>.from(raw) : const {};
+
+        final locationRaw = data['location'];
+        final location = locationRaw is Map
+            ? Map<String, Object?>.from(locationRaw)
+            : null;
+
+        final rawAvailableSeats = _readInt(data['available_seats']);
+        final occupiedSeats = _readInt(data['current_count']);
+        final reservedSeats = availability?.reservedSeats ?? 0;
+        final availableSeats = rawAvailableSeats.clamp(0, 999).toInt();
+        final occupancyStatus = (data['occupancy_status'] as String?)?.trim();
+
+        final currentStop =
+            (((data['current_stop'] as String?) ??
+                        (location?['current_stop'] as String?)) ??
+                    '')
+                .trim();
+        final nextStop =
+            (((data['next_stop'] as String?) ??
+                        (location?['next_stop'] as String?)) ??
+                    '')
+                .trim();
+
+        final normalizedStatus = (occupancyStatus ?? '').toLowerCase();
+        final hasHardFullStatus = normalizedStatus == 'full';
+
+        final isFull =
+            availableSeats <= 0 ||
+            hasHardFullStatus;
+
+        final freeBg = Color.alphaBlend(
+          scheme.primaryContainer.withValues(alpha: 0.55),
+          Colors.white,
+        );
+        final occupiedBg = Color.alphaBlend(
+          scheme.errorContainer.withValues(alpha: 0.55),
+          Colors.white,
+        );
+        final statusBg = isFull
+            ? Color.alphaBlend(
+                scheme.errorContainer.withValues(alpha: 0.6),
+                Colors.white,
+              )
+            : Color.alphaBlend(
+                scheme.primaryContainer.withValues(alpha: 0.6),
+                Colors.white,
               );
-            }
+        final statusFg = isFull ? scheme.error : scheme.primary;
+        final statusTitle = isFull
+            ? 'This shuttle is full'
+            : '${availableSeats.clamp(0, 999)} seats available!';
+        final statusSubtitle = isFull
+            ? 'Select another shuttle'
+            : 'Head to the next stop';
 
-            final raw = snapshot.data?.snapshot.value;
-            if (raw == null) {
-              return _cardShell(
-                context,
-                child: Text(
-                  'No data found at shuttles/$trackedShuttleKey.\n'
-                  'Check your Realtime Database path and rules.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              );
-            }
-            final data = raw is Map ? Map<String, Object?>.from(raw) : const {};
-
-            final locationRaw = data['location'];
-            final location = locationRaw is Map
-                ? Map<String, Object?>.from(locationRaw)
-                : null;
-
-            final rawAvailableSeats = _readInt(data['available_seats']);
-            final occupiedSeats = _readInt(data['current_count']);
-            final reservedSeats = availability?.reservedSeats ?? 0;
-            final availableSeats = rawAvailableSeats.clamp(0, 999).toInt();
-            final occupancyStatus = (data['occupancy_status'] as String?)
-                ?.trim();
-
-            final currentStop =
-                (((data['current_stop'] as String?) ??
-                            (location?['current_stop'] as String?)) ??
-                        '')
-                    .trim();
-            final nextStop =
-                (((data['next_stop'] as String?) ??
-                            (location?['next_stop'] as String?)) ??
-                        '')
-                    .trim();
-
-            final normalizedStatus = (occupancyStatus ?? '').toLowerCase();
-            final hasHardFullStatus = normalizedStatus == 'full';
-
-            final isFull = availableSeats <= 0 || hasHardFullStatus;
-
-            final freeBg = Color.alphaBlend(
-              scheme.primaryContainer.withValues(alpha: 0.55),
-              Colors.white,
-            );
-            final occupiedBg = Color.alphaBlend(
-              scheme.errorContainer.withValues(alpha: 0.55),
-              Colors.white,
-            );
-            final statusBg = isFull
-                ? Color.alphaBlend(
-                    scheme.errorContainer.withValues(alpha: 0.6),
-                    Colors.white,
-                  )
-                : Color.alphaBlend(
-                    scheme.primaryContainer.withValues(alpha: 0.6),
-                    Colors.white,
-                  );
-            final statusFg = isFull ? scheme.error : scheme.primary;
-            final statusTitle = isFull
-                ? 'This shuttle is full'
-                : '${availableSeats.clamp(0, 999)} seats available!';
-            final statusSubtitle = isFull
-                ? 'Select another shuttle'
-                : 'Head to the next stop';
-
-            return _cardShell(
-              context,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        return _cardShell(
+          context,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Row(
-                    children: [
-                      Image.asset(
-                        'assets/images/logo.png',
-                        height: 22,
-                        fit: BoxFit.contain,
-                      ),
-                      const Spacer(),
-                      if (availability != null)
-                        _StalenessPill(availability: availability),
-                    ],
+                  Image.asset(
+                    'assets/images/logo.png',
+                    height: 22,
+                    fit: BoxFit.contain,
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _StatBox(
-                          value: availableSeats,
-                          label: 'Free seats',
-                          background: freeBg,
-                          foreground: scheme.primary,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _StatBox(
-                          value: occupiedSeats,
-                          label: 'Occupied',
-                          background: occupiedBg,
-                          foreground: scheme.error,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _StatBox(
-                          value: reservedSeats,
-                          label: 'Reserved',
-                          background: scheme.surface,
-                          foreground: scheme.onSurface,
-                          borderColor: scheme.outlineVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.place_outlined,
-                        size: 16,
-                        color: scheme.primary,
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          'Current: ${currentStop.isEmpty ? '—' : currentStop}  •  Next: ${nextStop.isEmpty ? '—' : nextStop}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+                  const Spacer(),
+                  if (availability != null)
+                    _StalenessPill(availability: availability),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _StatBox(
+                      value: availableSeats,
+                      label: 'Free seats',
+                      background: freeBg,
+                      foreground: scheme.primary,
                     ),
-                    decoration: BoxDecoration(
-                      color: statusBg,
-                      borderRadius: BorderRadius.circular(10),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _StatBox(
+                      value: occupiedSeats,
+                      label: 'Occupied',
+                      background: occupiedBg,
+                      foreground: scheme.error,
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          statusTitle,
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(
-                                color: statusFg,
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          statusSubtitle,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: statusFg.withValues(alpha: 0.85),
-                              ),
-                        ),
-                      ],
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _StatBox(
+                      value: reservedSeats,
+                      label: 'Reserved',
+                      background: scheme.surface,
+                      foreground: scheme.onSurface,
+                      borderColor: scheme.outlineVariant,
                     ),
                   ),
                 ],
               ),
-            );
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.place_outlined, size: 16, color: scheme.primary),
+                  const SizedBox(width: 4),
+                  Text(
+                    '5 min away from you',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  Flexible(
+                    child: Text(
+                      'Current: ${currentStop.isEmpty ? '—' : currentStop}  •  Next: ${nextStop.isEmpty ? '—' : nextStop}',
+                      textAlign: TextAlign.right,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: statusBg,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      statusTitle,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: statusFg,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      statusSubtitle,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: statusFg.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
           },
         );
       },
@@ -481,29 +482,19 @@ class _StalenessPill extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
-          color: Color.alphaBlend(
-            scheme.errorContainer.withValues(alpha: 0.12),
-            Colors.white,
-          ),
+          color: Color.alphaBlend(scheme.errorContainer.withValues(alpha: 0.12), Colors.white),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: scheme.error.withValues(alpha: 0.12)),
         ),
-        child: Text(
-          'Stale • updated ${_fmt(availability.lastComputedAt)}',
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: scheme.error),
-        ),
+        child: Text('Stale • updated ${_fmt(availability.lastComputedAt)}',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.error)),
       );
     }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: Color.alphaBlend(
-          scheme.primaryContainer.withValues(alpha: 0.12),
-          Colors.white,
-        ),
+        color: Color.alphaBlend(scheme.primaryContainer.withValues(alpha: 0.12), Colors.white),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.primary.withValues(alpha: 0.12)),
       ),
@@ -512,12 +503,7 @@ class _StalenessPill extends StatelessWidget {
         children: [
           Icon(Icons.wifi, size: 14, color: scheme.primary),
           const SizedBox(width: 6),
-          Text(
-            'Live',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.primary),
-          ),
+          Text('Live', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.primary)),
         ],
       ),
     );
@@ -556,32 +542,24 @@ class _BookingEntryCard extends StatelessWidget {
     return StreamBuilder<List<BookingRecord>>(
       stream: BookingService().watchUserBookings(userUid: uid),
       builder: (context, snapshot) {
-        final bookings = snapshot.data ?? const <BookingRecord>[];
-        final hasAnyActiveOrReserved = bookings.any((b) => b.isActive);
-        final hasOnTrip = bookings.any(
-          (b) => (b.status).toLowerCase() == 'active',
-        );
-        final hasReservedOnly = hasAnyActiveOrReserved && !hasOnTrip;
+        final hasActive = snapshot.data?.any((b) => b.isActive) ?? false;
 
         void action() {
-          if (hasAnyActiveOrReserved) {
-            Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => MyBookingsScreen()));
+          if (hasActive) {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => MyBookingsScreen()),
+            );
             return;
           }
 
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) =>
-                  BookingScreen(trackedShuttleKey: trackedShuttleKey),
+              builder: (_) => BookingScreen(trackedShuttleKey: trackedShuttleKey),
             ),
           );
         }
 
-        final buttonLabel = hasAnyActiveOrReserved
-            ? (hasOnTrip ? 'On Trip' : 'View Booking')
-            : 'Book Now';
+        final buttonLabel = hasActive ? 'View Booking' : 'Book Now';
 
         return Material(
           color: Colors.transparent,
@@ -623,21 +601,13 @@ class _BookingEntryCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              hasOnTrip
-                                  ? 'You are on a trip'
-                                  : hasReservedOnly
-                                  ? 'You have a reserved booking'
-                                  : 'Book a seat',
+                              hasActive ? 'You have an active booking' : 'Book a seat',
                               style: Theme.of(context).textTheme.titleSmall
                                   ?.copyWith(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              hasOnTrip
-                                  ? 'Scanner detected you as onboard. Safe travels! Details unavailable while onboard.'
-                                  : hasReservedOnly
-                                  ? 'Cancel or complete it to make a new booking'
-                                  : 'Choose pick up and destination',
+                              hasActive ? 'Cancel or complete it to make a new booking' : 'Choose pick up and destination',
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: scheme.onSurfaceVariant),
                             ),
@@ -651,7 +621,7 @@ class _BookingEntryCard extends StatelessWidget {
                     width: double.infinity,
                     height: 44,
                     child: FilledButton(
-                      onPressed: hasOnTrip ? null : action,
+                      onPressed: action,
                       child: Text(buttonLabel),
                     ),
                   ),

@@ -292,7 +292,10 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        content: Text(message, textAlign: TextAlign.center),
+        content: Text(
+          message,
+          textAlign: TextAlign.center,
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -376,8 +379,8 @@ class _BookingTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final statusLower = booking.status.toLowerCase();
     final statusColor = statusLower == 'reserved'
-        ? scheme.primary
-        : statusLower == 'active'
+      ? scheme.primary
+      : statusLower == 'active'
         ? const Color(0xFFFFA726)
         : scheme.error;
     final created = booking.createdAt != null
@@ -387,11 +390,9 @@ class _BookingTile extends StatelessWidget {
     final timeText = created != null ? '${_formatTime(created, context)}' : '';
 
     // Map status to display label and colors to match the design
-    final statusLabel = statusLower == 'active'
-        ? 'ACTIVE'
-        : statusLower == 'reserved'
-        ? 'RESERVED'
-        : statusLower == 'completed'
+    final statusLabel = (statusLower == 'reserved' || statusLower == 'active')
+      ? 'ACTIVE'
+      : statusLower == 'completed'
         ? 'COMPLETED'
         : booking.status.toUpperCase();
 
@@ -583,14 +584,14 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     try {
-      final scheme = Theme.of(context).colorScheme;
-      final receipt = _receiptFromBooking(booking);
-      final statusLower = booking.status.toLowerCase();
-      final statusColor = statusLower == 'reserved'
+        final scheme = Theme.of(context).colorScheme;
+        final receipt = _receiptFromBooking(booking);
+        final statusLower = booking.status.toLowerCase();
+        final statusColor = statusLower == 'reserved'
           ? scheme.primary
           : statusLower == 'active'
-          ? const Color(0xFFFFA726)
-          : scheme.error;
+            ? const Color(0xFFFFA726)
+            : scheme.error;
 
       return Scaffold(
         backgroundColor: Colors.white,
