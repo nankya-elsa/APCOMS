@@ -43,7 +43,8 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
       stream: _service.watchUserProfile(user.uid),
       builder: (context, snapshot) {
         final profile = snapshot.data;
-        if (snapshot.connectionState == ConnectionState.waiting && profile == null) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            profile == null) {
           return const Center(child: CircularProgressIndicator());
         }
 
@@ -80,10 +81,8 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
                           child: _buildAccountSection(context, profile),
                         ),
                         const SizedBox(height: 12),
-                        
-                        _glassCard(
-                          child: _buildActionsSection(context),
-                        ),
+
+                        _glassCard(child: _buildActionsSection(context)),
                         const SizedBox(height: 32),
                       ],
                     ),
@@ -97,7 +96,12 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
     );
   }
 
-  Widget _buildHeader(BuildContext context, UserProfile? profile, String? photoUrl, Color accent) {
+  Widget _buildHeader(
+    BuildContext context,
+    UserProfile? profile,
+    String? photoUrl,
+    Color accent,
+  ) {
     return Stack(
       children: [
         // Edit button overlayed top-right
@@ -128,34 +132,57 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
               child: CircleAvatar(
                 radius: 40,
                 backgroundColor: accent.withOpacity(0.12),
-                foregroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+                foregroundImage: photoUrl != null
+                    ? NetworkImage(photoUrl)
+                    : null,
                 child: photoUrl == null
                     ? Text(
-                        (profile?.firstName.isNotEmpty == true ? profile!.firstName.characters.first : 'U').toUpperCase(),
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+                        (profile?.firstName.isNotEmpty == true
+                                ? profile!.firstName.characters.first
+                                : 'U')
+                            .toUpperCase(),
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       )
                     : null,
               ),
             ),
             const SizedBox(height: 14),
             Text(
-              profile?.fullName.isNotEmpty == true ? profile!.fullName : (FirebaseAuth.instance.currentUser?.displayName ?? 'User'),
+              profile?.fullName.isNotEmpty == true
+                  ? profile!.fullName
+                  : (FirebaseAuth.instance.currentUser?.displayName ?? 'User'),
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
             if (profile?.role.isNotEmpty == true)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.7),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text(profile!.role, style: Theme.of(context).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700)),
+                child: Text(
+                  profile!.role,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
               ),
             if (profile?.roleNumber.isNotEmpty == true) ...[
               const SizedBox(height: 6),
-              Text('#${profile!.roleNumber}', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54)),
+              Text(
+                '#${profile!.roleNumber}',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+              ),
             ],
           ],
         ),
@@ -193,7 +220,12 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Account', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+        Text(
+          'Account',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
         const SizedBox(height: 8),
         TextField(
           controller: _fullNameCtl,
@@ -204,7 +236,10 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
             prefixIcon: const Icon(Icons.person_outline),
             filled: true,
             fillColor: Colors.white,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
           ),
         ),
         const SizedBox(height: 10),
@@ -217,7 +252,10 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
             prefixIcon: const Icon(Icons.email_outlined),
             filled: true,
             fillColor: Colors.white,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
           ),
         ),
         const SizedBox(height: 10),
@@ -230,7 +268,10 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
             prefixIcon: const Icon(Icons.badge_outlined),
             filled: true,
             fillColor: Colors.white,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
           ),
         ),
         const SizedBox(height: 14),
@@ -240,12 +281,20 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
               Expanded(
                 child: FilledButton(
                   onPressed: _saving ? null : _saveProfile,
-                  child: _saving ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Save'),
+                  child: _saving
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save'),
                 ),
               ),
               const SizedBox(width: 10),
               OutlinedButton(
-                onPressed: _saving ? null : () => setState(() => _editing = false),
+                onPressed: _saving
+                    ? null
+                    : () => setState(() => _editing = false),
                 child: const Text('Cancel'),
               ),
             ],
@@ -254,13 +303,16 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
     );
   }
 
-  
-
   Widget _buildActionsSection(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Actions', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+        Text(
+          'Actions',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
         const SizedBox(height: 8),
         ListTile(
           contentPadding: EdgeInsets.zero,
@@ -295,10 +347,14 @@ class _DashboardProfileTabState extends State<DashboardProfileTab> {
       setState(() {
         _editing = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile saved.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile saved.')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: ${e.toString()}')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Save failed: ${e.toString()}')));
     } finally {
       if (!mounted) return;
       setState(() => _saving = false);
