@@ -1,6 +1,7 @@
 
 # Virtual environment
 counting_module/venv/
+counting_module/.venv/
 
 # Firebase secret key - NEVER push this
 firebase_credentials.json
