@@ -1,5 +1,5 @@
 param(
-  [string]$WebKey = 'AIzaSyBaMaZRs2aLuMh2QtxRhd5RS2eKubhf1_U'
+  [string]$WebKey = ''
 )
 
 Write-Host "Running Flutter web with Google Maps API key (web)..."
