@@ -7,7 +7,6 @@ import '../models/booking_receipt.dart';
 import '../models/booking_record.dart';
 import '../models/shuttle_route.dart';
 import '../services/booking_service.dart';
-import '../utils/ticket_downloader.dart';
 import '../widgets/shuttle_location_map.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import '../services/shuttle_route_geometry_service.dart';
@@ -718,66 +717,10 @@ class _LabeledField extends StatelessWidget {
   }
 }
 
-class _BookingQrDialog extends StatefulWidget {
+class _BookingQrDialog extends StatelessWidget {
   const _BookingQrDialog({required this.receipt});
 
   final BookingReceipt receipt;
-
-  @override
-  State<_BookingQrDialog> createState() => _BookingQrDialogState();
-}
-
-class _BookingQrDialogState extends State<_BookingQrDialog> {
-  bool _isDownloading = false;
-
-  Future<void> _downloadQr() async {
-    setState(() => _isDownloading = true);
-    try {
-      final painter = QrPainter(
-        data: widget.receipt.qrPayload,
-        version: QrVersions.auto,
-        gapless: false,
-        eyeStyle: const QrEyeStyle(
-          eyeShape: QrEyeShape.square,
-          color: Colors.black,
-        ),
-        dataModuleStyle: const QrDataModuleStyle(
-          dataModuleShape: QrDataModuleShape.square,
-          color: Colors.black,
-        ),
-      );
-      final imageData = await painter.toImageData(720);
-      final bytes = imageData?.buffer.asUint8List();
-      if (bytes == null) {
-        throw StateError('Could not render QR code.');
-      }
-
-      final downloaded = await downloadTicketPng(
-        fileName: 'shuttlego-ticket-${widget.receipt.bookingId}.png',
-        bytes: bytes,
-      );
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              downloaded
-                  ? 'Ticket downloaded.'
-                  : 'Download is currently available on web only.',
-            ),
-          ),
-        );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text('Download failed. $e')));
-    } finally {
-      if (mounted) setState(() => _isDownloading = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -794,26 +737,15 @@ class _BookingQrDialogState extends State<_BookingQrDialog> {
             child: SizedBox(
               height: 220,
               width: 220,
-              child: _QrWidget(data: widget.receipt.qrPayload),
+              child: _QrWidget(data: receipt.qrPayload),
             ),
           ),
           const SizedBox(height: 12),
-          Text('Pickup: ${widget.receipt.pickupStop}'),
-          Text('Destination: ${widget.receipt.destinationStop}'),
+          Text('Pickup: ${receipt.pickupStop}'),
+          Text('Destination: ${receipt.destinationStop}'),
         ],
       ),
       actions: [
-        TextButton.icon(
-          onPressed: _isDownloading ? null : _downloadQr,
-          icon: _isDownloading
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.download),
-          label: const Text('Download'),
-        ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Done'),

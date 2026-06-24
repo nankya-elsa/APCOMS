@@ -1,7 +1,7 @@
 
 # Virtual environment
 counting_module/venv/
-
+counting_module/.venv/
 # Firebase secret key - NEVER push this
 firebase_credentials.json
 serviceAccountKey.json
@@ -14,7 +14,7 @@ __pycache__/
 
 # Environment variables
 .env
-
+.venv
 # VS Code settings
 .vscode/
 

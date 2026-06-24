@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../models/booking_receipt.dart';
 import '../models/booking_record.dart';
 import '../services/booking_service.dart';
-import '../utils/ticket_downloader.dart';
 
 BookingReceipt _receiptFromBooking(BookingRecord booking) {
   return BookingReceipt(
@@ -159,7 +157,8 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
                         booking: booking,
                         onOpen: () => _openDetails(booking),
                         onShowQr: () => _showQr(booking),
-                        onCancel: booking.isActive
+                        // Allow cancel only when booking is still in 'reserved' state
+                        onCancel: booking.status.toLowerCase() == 'reserved'
                             ? () => _cancelBooking(booking)
                             : null,
                       ),
@@ -576,7 +575,6 @@ class BookingDetailsScreen extends StatefulWidget {
 class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   bool _isCancelling = false;
   bool _isDeleting = false;
-  bool _isDownloading = false;
 
   BookingRecord get booking => widget.booking;
 
@@ -704,21 +702,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _isDownloading ? null : _downloadTicket,
-                      icon: _isDownloading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.download_outlined),
-                      label: const Text('Download'),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -772,12 +755,10 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
               ),
             ),
             const SizedBox(height: 18),
-            // Action buttons: Download already provided above. Show cancel for
-            // active bookings and delete for past bookings.
             SizedBox(
               width: double.infinity,
               height: 54,
-              child: booking.isActive
+              child: booking.status.toLowerCase() == 'reserved'
                   ? FilledButton.icon(
                       onPressed: _isCancelling ? null : _cancelBooking,
                       icon: _isCancelling
@@ -855,13 +836,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
     }
   }
 
-  void _showQr(BookingReceipt receipt) {
-    showDialog<void>(
-      context: context,
-      builder: (context) => _BookingQrDialog(receipt: receipt),
-    );
-  }
-
   Future<void> _cancelBooking() async {
     final reason = await showModalBottomSheet<String>(
       context: context,
@@ -885,53 +859,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
         ..showSnackBar(SnackBar(content: Text('Cancel failed. $e')));
     } finally {
       if (mounted) setState(() => _isCancelling = false);
-    }
-  }
-
-  Future<void> _downloadTicket() async {
-    setState(() => _isDownloading = true);
-    try {
-      final painter = QrPainter(
-        data: _receiptFromBooking(booking).qrPayload,
-        version: QrVersions.auto,
-        gapless: false,
-        eyeStyle: const QrEyeStyle(
-          eyeShape: QrEyeShape.square,
-          color: Colors.black,
-        ),
-        dataModuleStyle: const QrDataModuleStyle(
-          dataModuleShape: QrDataModuleShape.square,
-          color: Colors.black,
-        ),
-      );
-      final imageData = await painter.toImageData(720);
-      final bytes = imageData?.buffer.asUint8List();
-      if (bytes == null) throw StateError('Could not render QR code.');
-
-      final downloaded = await downloadTicketPng(
-        fileName: 'shuttlego-ticket-${booking.bookingId}.png',
-        bytes: bytes,
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              downloaded
-                  ? 'Ticket downloaded.'
-                  : 'Download is available on web only.',
-            ),
-          ),
-        );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text('Download failed. $e')));
-    } finally {
-      if (mounted) setState(() => _isDownloading = false);
     }
   }
 
@@ -971,45 +898,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
     } finally {
       if (mounted) setState(() => _isDeleting = false);
     }
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({required this.label, required this.value, this.color});
-
-  final String label;
-  final String value;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 104,
-            child: Text(
-              label,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: color ?? scheme.onSurface,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 
@@ -1073,6 +961,25 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
   ];
 
   String? _selectedReason = _reasons.first;
+  final _customReasonController = TextEditingController();
+
+  @override
+  void dispose() {
+    _customReasonController.dispose();
+    super.dispose();
+  }
+
+  bool get _isCustomReasonSelected => _selectedReason == 'Other';
+
+  bool get _isConfirmEnabled {
+    if (!_isCustomReasonSelected) return _selectedReason != null;
+    return _customReasonController.text.trim().isNotEmpty;
+  }
+
+  String get _effectiveReason {
+    if (!_isCustomReasonSelected) return _selectedReason ?? 'Cancelled by user';
+    return _customReasonController.text.trim();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1104,15 +1011,31 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
                     ),
                   )
                   .toList(),
-              onChanged: (value) => setState(() => _selectedReason = value),
+              onChanged: (value) => setState(() {
+                _selectedReason = value;
+                if (!_isCustomReasonSelected) {
+                  _customReasonController.clear();
+                }
+              }),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
+            if (_isCustomReasonSelected)
+              TextFormField(
+                controller: _customReasonController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Enter custom reason',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            if (_isCustomReasonSelected) const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: _selectedReason == null
+                onPressed: !_isConfirmEnabled
                     ? null
-                    : () => Navigator.of(context).pop(_selectedReason),
+                    : () => Navigator.of(context).pop(_effectiveReason),
                 child: const Text('Confirm cancellation'),
               ),
             ),
@@ -1123,66 +1046,10 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
   }
 }
 
-class _BookingQrDialog extends StatefulWidget {
+class _BookingQrDialog extends StatelessWidget {
   const _BookingQrDialog({required this.receipt});
 
   final BookingReceipt receipt;
-
-  @override
-  State<_BookingQrDialog> createState() => _BookingQrDialogState();
-}
-
-class _BookingQrDialogState extends State<_BookingQrDialog> {
-  bool _isDownloading = false;
-
-  Future<void> _downloadQr() async {
-    setState(() => _isDownloading = true);
-    try {
-      final painter = QrPainter(
-        data: widget.receipt.qrPayload,
-        version: QrVersions.auto,
-        gapless: false,
-        eyeStyle: const QrEyeStyle(
-          eyeShape: QrEyeShape.square,
-          color: Colors.black,
-        ),
-        dataModuleStyle: const QrDataModuleStyle(
-          dataModuleShape: QrDataModuleShape.square,
-          color: Colors.black,
-        ),
-      );
-      final imageData = await painter.toImageData(720);
-      final bytes = imageData?.buffer.asUint8List();
-      if (bytes == null) {
-        throw StateError('Could not render QR code.');
-      }
-
-      final downloaded = await downloadTicketPng(
-        fileName: 'shuttlego-ticket-${widget.receipt.bookingId}.png',
-        bytes: bytes,
-      );
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              downloaded
-                  ? 'Ticket downloaded.'
-                  : 'Download is currently available on web only.',
-            ),
-          ),
-        );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text('Download failed. $e')));
-    } finally {
-      if (mounted) setState(() => _isDownloading = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1200,29 +1067,18 @@ class _BookingQrDialogState extends State<_BookingQrDialog> {
               height: 220,
               width: 220,
               child: QrImageView(
-                data: widget.receipt.qrPayload,
+                data: receipt.qrPayload,
                 version: QrVersions.auto,
                 gapless: false,
               ),
             ),
           ),
           const SizedBox(height: 12),
-          Text('Pickup: ${widget.receipt.pickupStop}'),
-          Text('Destination: ${widget.receipt.destinationStop}'),
+          Text('Pickup: ${receipt.pickupStop}'),
+          Text('Destination: ${receipt.destinationStop}'),
         ],
       ),
       actions: [
-        TextButton.icon(
-          onPressed: _isDownloading ? null : _downloadQr,
-          icon: _isDownloading
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.download),
-          label: const Text('Download'),
-        ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Done'),
