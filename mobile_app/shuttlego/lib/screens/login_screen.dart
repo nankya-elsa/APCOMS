@@ -70,9 +70,14 @@ class _LoginScreenState extends State<LoginScreen> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Too many attempts'),
-          content: Text('Too many failed login attempts. Try again in ${remain}s.'),
+          content: Text(
+            'Too many failed login attempts. Try again in ${remain}s.',
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
           ],
         ),
       );
@@ -96,14 +101,19 @@ class _LoginScreenState extends State<LoginScreen> {
       // Increment failed attempts and trigger lockout if limit reached.
       _failedAttempts++;
       if (_failedAttempts >= _maxAttempts) {
-        _lockoutUntil = DateTime.now().add(const Duration(seconds: _lockoutSeconds));
+        _lockoutUntil = DateTime.now().add(
+          const Duration(seconds: _lockoutSeconds),
+        );
       }
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           content: Text(_friendlyErrorMessage(e), textAlign: TextAlign.center),
           actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK')),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
           ],
         ),
       );
@@ -254,8 +264,205 @@ class _LoginScreenState extends State<LoginScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                             foregroundColor: Colors.black54,
                           ),
-                          onPressed: () {
-                            // TODO: Forgot password flow.
+                          onPressed: () async {
+                            final email = _emailController.text.trim();
+                            if (email.isEmpty) {
+                              await showDialog<void>(
+                                context: context,
+                                builder: (context) {
+                                  final _dialogEmail = TextEditingController();
+                                  return AlertDialog(
+                                    title: const Text('Reset password'),
+                                    content: TextField(
+                                      controller: _dialogEmail,
+                                      keyboardType: TextInputType.emailAddress,
+                                      decoration: const InputDecoration(
+                                        hintText: 'Enter your account email',
+                                      ),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () async {
+                                          final e = _dialogEmail.text.trim();
+                                          Navigator.of(context).pop();
+                                          if (e.isEmpty) return;
+                                          final messenger =
+                                              ScaffoldMessenger.of(
+                                                this.context,
+                                              );
+                                          messenger.hideCurrentMaterialBanner();
+                                          messenger.showMaterialBanner(
+                                            MaterialBanner(
+                                              backgroundColor: Colors.black,
+                                              content: const Text(
+                                                'Sending password reset email...',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              leading: const Icon(
+                                                Icons.email,
+                                                color: Colors.white,
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  style: TextButton.styleFrom(
+                                                    foregroundColor:
+                                                        Colors.white,
+                                                  ),
+                                                  onPressed: () => messenger
+                                                      .hideCurrentMaterialBanner(),
+                                                  child: const Text('OK'),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          try {
+                                            await const AuthService()
+                                                .sendPasswordResetEmail(
+                                                  email: e,
+                                                );
+                                            if (!mounted) return;
+                                            messenger
+                                                .hideCurrentMaterialBanner();
+                                            messenger.showMaterialBanner(
+                                              MaterialBanner(
+                                                backgroundColor: Colors.black,
+                                                content: const Text(
+                                                  'Password reset email sent to your inbox. Check your email inbox or spam folder.',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                                leading: const Icon(
+                                                  Icons.email,
+                                                  color: Colors.white,
+                                                ),
+                                                actions: [
+                                                  TextButton(
+                                                    style: TextButton.styleFrom(
+                                                      foregroundColor:
+                                                          Colors.white,
+                                                    ),
+                                                    onPressed: () => messenger
+                                                        .hideCurrentMaterialBanner(),
+                                                    child: const Text('OK'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                            // Persist until user dismisses by tapping OK.
+                                          } on FirebaseAuthException catch (
+                                            err
+                                          ) {
+                                            messenger
+                                                .hideCurrentMaterialBanner();
+                                            if (!mounted) return;
+                                            await showDialog<void>(
+                                              context: context,
+                                              builder: (context) => AlertDialog(
+                                                content: Text(
+                                                  _friendlyErrorMessage(err),
+                                                ),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () =>
+                                                        Navigator.of(
+                                                          context,
+                                                        ).pop(),
+                                                    child: const Text('OK'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }
+                                        },
+                                        child: const Text('Send'),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              );
+                            } else {
+                              final messenger = ScaffoldMessenger.of(
+                                this.context,
+                              );
+                              messenger.hideCurrentMaterialBanner();
+                              messenger.showMaterialBanner(
+                                MaterialBanner(
+                                  backgroundColor: Colors.black,
+                                  content: const Text(
+                                    'Sending password reset email...',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                  leading: const Icon(
+                                    Icons.email,
+                                    color: Colors.white,
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.white,
+                                      ),
+                                      onPressed: () =>
+                                          messenger.hideCurrentMaterialBanner(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              try {
+                                await const AuthService()
+                                    .sendPasswordResetEmail(email: email);
+                                if (!mounted) return;
+                                messenger.hideCurrentMaterialBanner();
+                                messenger.showMaterialBanner(
+                                  MaterialBanner(
+                                    backgroundColor: Colors.black,
+                                    content: const Text(
+                                      'Password reset email sent to your email. Check your inbox.',
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                    leading: const Icon(
+                                      Icons.email,
+                                      color: Colors.white,
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: Colors.white,
+                                        ),
+                                        onPressed: () => messenger
+                                            .hideCurrentMaterialBanner(),
+                                        child: const Text('OK'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                // Persistent banner: remain visible until user taps OK.
+                              } on FirebaseAuthException catch (err) {
+                                messenger.hideCurrentMaterialBanner();
+                                if (!mounted) return;
+                                await showDialog<void>(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    content: Text(_friendlyErrorMessage(err)),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(),
+                                        child: const Text('OK'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
+                            }
                           },
                           child: const Text('Forgot Password?'),
                         ),
