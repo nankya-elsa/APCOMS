@@ -21,7 +21,6 @@ BookingReceipt _receiptFromBooking(BookingRecord booking) {
   );
 }
 
-// Shared date helper for multiple widgets to format display date.
 String _formatDate(DateTime d) {
   final month = _monthName(d.month);
   return '$month ${d.day}, ${d.year}';
@@ -29,20 +28,21 @@ String _formatDate(DateTime d) {
 
 String _monthName(int m) {
   const names = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
   ];
   return names[m - 1];
+}
+
+/// Converts a shuttleKey like "shuttle_001" → "Shuttle 1"
+String _prettifyShuttleKey(String key) {
+  final match = RegExp(r'(\D+)_?0*(\d+)$').firstMatch(key);
+  if (match != null) {
+    final prefix = match.group(1)!.replaceAll('_', ' ').trim();
+    final number = match.group(2)!;
+    return '${prefix[0].toUpperCase()}${prefix.substring(1)} $number';
+  }
+  return key.replaceAll('_', ' ').trim();
 }
 
 class MyBookingsScreen extends StatefulWidget {
@@ -56,14 +56,6 @@ class MyBookingsScreen extends StatefulWidget {
 
 class _MyBookingsScreenState extends State<MyBookingsScreen> {
   late final BookingService _service = widget.service ?? BookingService();
-
-  @override
-  void initState() {
-    super.initState();
-    // Stream will be created lazily and reused by the StreamBuilder.
-  }
-
-  // Removed temporary one-shot debug and debug listener.
 
   @override
   Widget build(BuildContext context) {
@@ -88,8 +80,6 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
           surfaceTintColor: Colors.white,
         ),
         body: StreamBuilder<List<BookingRecord>>(
-          // Request a fresh stream on every build so UI reflects recent
-          // changes (e.g. cancellations) immediately after returning.
           stream: _service.watchUserBookings(userUid: user.uid),
           initialData: const <BookingRecord>[],
           builder: (context, snapshot) {
@@ -157,7 +147,6 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
                         booking: booking,
                         onOpen: () => _openDetails(booking),
                         onShowQr: () => _showQr(booking),
-                        // Allow cancel only when booking is still in 'reserved' state
                         onCancel: booking.status.toLowerCase() == 'reserved'
                             ? () => _cancelBooking(booking)
                             : null,
@@ -208,9 +197,8 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
                 const SizedBox(height: 8),
                 Text(
                   e.toString(),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: Colors.red),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: Colors.red),
                 ),
                 const SizedBox(height: 8),
                 SelectableText(st.toString()),
@@ -243,6 +231,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
     final reason = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (context) => const _CancelReasonSheet(),
     );
     if (!mounted || reason == null || reason.trim().isEmpty) return;
@@ -301,13 +290,9 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
       ),
     );
   }
-
-  @override
-  void dispose() {
-    super.dispose();
-  }
 }
 
+// ── Empty state ───────────────────────────────────────────────────────────────
 class _BookingsEmptyState extends StatelessWidget {
   const _BookingsEmptyState({required this.uid});
 
@@ -330,25 +315,15 @@ class _BookingsEmptyState extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               'No bookings found',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
-              'This page shows bookings where user_uid matches your signed-in account.',
+              'Your bookings will appear here once you make one.',
               textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 10),
-            SelectableText(
-              'Current uid: $uid',
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -357,6 +332,7 @@ class _BookingsEmptyState extends StatelessWidget {
   }
 }
 
+// ── Booking tile ──────────────────────────────────────────────────────────────
 class _BookingTile extends StatelessWidget {
   const _BookingTile({
     required this.booking,
@@ -374,25 +350,19 @@ class _BookingTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final statusLower = booking.status.toLowerCase();
-    final statusColor = statusLower == 'reserved'
-        ? scheme.primary
-        : statusLower == 'active'
-        ? const Color(0xFFFFA726)
-        : scheme.error;
     final created = booking.createdAt != null
         ? DateTime.fromMillisecondsSinceEpoch(booking.createdAt!).toLocal()
         : null;
-    final dateText = created != null ? '${_formatDate(created)}' : '';
-    final timeText = created != null ? '${_formatTime(created, context)}' : '';
+    final dateText = created != null ? _formatDate(created) : '';
+    final timeText = created != null ? _formatTime(created, context) : '';
 
-    // Map status to display label and colors to match the design
     final statusLabel = statusLower == 'active'
         ? 'ACTIVE'
         : statusLower == 'reserved'
-        ? 'RESERVED'
-        : statusLower == 'completed'
-        ? 'COMPLETED'
-        : booking.status.toUpperCase();
+            ? 'RESERVED'
+            : statusLower == 'completed'
+                ? 'COMPLETED'
+                : booking.status.toUpperCase();
 
     Color tileIconColor;
     Color tileBgColor;
@@ -415,12 +385,13 @@ class _BookingTile extends StatelessWidget {
       statusChipBg = const Color(0xFFF8FAFC);
       statusChipText = const Color(0xFF6B7280);
     } else {
-      // cancelled or other
       tileIconColor = const Color(0xFFBF3B3B);
       tileBgColor = const Color(0xFFFFF4F4);
       statusChipBg = const Color(0xFFFFF1F2);
       statusChipText = const Color(0xFFBF3B3B);
     }
+
+    final shuttleName = _prettifyShuttleKey(booking.shuttleKey);
 
     return Container(
       decoration: BoxDecoration(
@@ -488,7 +459,42 @@ class _BookingTile extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
+
+                      const SizedBox(height: 6),
+
+                      // Shuttle badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Color.alphaBlend(
+                            scheme.primaryContainer.withOpacity(0.45),
+                            Colors.white,
+                          ),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.directions_bus_rounded,
+                                size: 12, color: scheme.primary),
+                            const SizedBox(width: 4),
+                            Text(
+                              shuttleName,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: scheme.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 6),
+
                       Row(
                         children: [
                           Icon(
@@ -558,6 +564,7 @@ class _BookingTile extends StatelessWidget {
   }
 }
 
+// ── Booking details screen ────────────────────────────────────────────────────
 class BookingDetailsScreen extends StatefulWidget {
   const BookingDetailsScreen({
     super.key,
@@ -587,8 +594,10 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
       final statusColor = statusLower == 'reserved'
           ? scheme.primary
           : statusLower == 'active'
-          ? const Color(0xFFFFA726)
-          : scheme.error;
+              ? const Color(0xFFFFA726)
+              : scheme.error;
+
+      final shuttleName = _prettifyShuttleKey(booking.shuttleKey);
 
       return Scaffold(
         backgroundColor: Colors.white,
@@ -602,26 +611,59 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
           children: [
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  booking.status.toUpperCase(),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: statusColor,
-                    fontWeight: FontWeight.w800,
+            // Status + shuttle badge row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    booking.status.toUpperCase(),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: statusColor,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Color.alphaBlend(
+                      scheme.primaryContainer.withOpacity(0.45),
+                      Colors.white,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.directions_bus_rounded,
+                          size: 13, color: scheme.primary),
+                      const SizedBox(width: 5),
+                      Text(
+                        shuttleName,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
+
             const SizedBox(height: 12),
+
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -651,7 +693,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 12),
-                  // Codes row (e.g. CEDAT -> COCIS)
                   Text(
                     '${booking.pickupStop.toUpperCase()}  →  ${booking.destinationStop.toUpperCase()}',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -705,7 +746,9 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 ],
               ),
             ),
+
             const SizedBox(height: 16),
+
             Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
@@ -715,6 +758,11 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 padding: const EdgeInsets.all(12),
                 child: Column(
                   children: [
+                    _InfoRow(
+                      icon: Icons.directions_bus_rounded,
+                      label: 'Shuttle',
+                      value: shuttleName,
+                    ),
                     _InfoRow(
                       icon: Icons.location_on_outlined,
                       label: 'Pickup',
@@ -727,7 +775,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                     ),
                     _InfoRow(
                       icon: Icons.event,
-                      label: 'Shuttle Date',
+                      label: 'Date',
                       value: booking.createdAt != null
                           ? DateTime.fromMillisecondsSinceEpoch(
                               booking.createdAt!,
@@ -754,7 +802,9 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 ),
               ),
             ),
+
             const SizedBox(height: 18),
+
             SizedBox(
               width: double.infinity,
               height: 54,
@@ -800,7 +850,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
         ),
       );
     } catch (e, st) {
-      // Show the error so it's visible in the UI instead of crashing to white screen
       debugPrint('BookingDetails build error: $e\n$st');
       return Scaffold(
         appBar: AppBar(title: const Text('Booking Details')),
@@ -819,9 +868,8 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 const SizedBox(height: 8),
                 Text(
                   e.toString(),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: Colors.red),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: Colors.red),
                 ),
                 const SizedBox(height: 8),
                 SelectableText(
@@ -840,6 +888,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
     final reason = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (context) => const _CancelReasonSheet(),
     );
     if (!mounted || reason == null || reason.trim().isEmpty) return;
@@ -901,6 +950,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   }
 }
 
+// ── Info row ──────────────────────────────────────────────────────────────────
 class _InfoRow extends StatelessWidget {
   const _InfoRow({
     required this.icon,
@@ -925,17 +975,15 @@ class _InfoRow extends StatelessWidget {
             width: 104,
             child: Text(
               label,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -944,6 +992,7 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
+// ── Cancel reason sheet ───────────────────────────────────────────────────────
 class _CancelReasonSheet extends StatefulWidget {
   const _CancelReasonSheet();
 
@@ -983,69 +1032,72 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Cancel booking',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _selectedReason,
-              decoration: const InputDecoration(
-                labelText: 'Reason',
-                border: OutlineInputBorder(),
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.6,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Cancel booking',
+                style: Theme.of(context).textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w800),
               ),
-              items: _reasons
-                  .map(
-                    (reason) => DropdownMenuItem<String>(
-                      value: reason,
-                      child: Text(reason),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) => setState(() {
-                _selectedReason = value;
-                if (!_isCustomReasonSelected) {
-                  _customReasonController.clear();
-                }
-              }),
-            ),
-            const SizedBox(height: 12),
-            if (_isCustomReasonSelected)
-              TextFormField(
-                controller: _customReasonController,
-                maxLines: 3,
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _selectedReason,
                 decoration: const InputDecoration(
-                  labelText: 'Enter custom reason',
+                  labelText: 'Reason',
                   border: OutlineInputBorder(),
                 ),
-                onChanged: (_) => setState(() {}),
+                items: _reasons
+                    .map(
+                      (reason) => DropdownMenuItem<String>(
+                        value: reason,
+                        child: Text(reason),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() {
+                  _selectedReason = value;
+                  if (!_isCustomReasonSelected) {
+                    _customReasonController.clear();
+                  }
+                }),
               ),
-            if (_isCustomReasonSelected) const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: !_isConfirmEnabled
-                    ? null
-                    : () => Navigator.of(context).pop(_effectiveReason),
-                child: const Text('Confirm cancellation'),
+              const SizedBox(height: 12),
+              if (_isCustomReasonSelected)
+                TextFormField(
+                  controller: _customReasonController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Enter custom reason',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              if (_isCustomReasonSelected) const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: !_isConfirmEnabled
+                      ? null
+                      : () => Navigator.of(context).pop(_effectiveReason),
+                  child: const Text('Confirm cancellation'),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
+// ── QR dialog ─────────────────────────────────────────────────────────────────
 class _BookingQrDialog extends StatelessWidget {
   const _BookingQrDialog({required this.receipt});
 
