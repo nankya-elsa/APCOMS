@@ -34,6 +34,17 @@ String _monthName(int m) {
   return names[m - 1];
 }
 
+/// Converts a shuttleKey like "shuttle_001" → "Shuttle 1"
+String _prettifyShuttleKey(String key) {
+  final match = RegExp(r'(\D+)_?0*(\d+)$').firstMatch(key);
+  if (match != null) {
+    final prefix = match.group(1)!.replaceAll('_', ' ').trim();
+    final number = match.group(2)!;
+    return '${prefix[0].toUpperCase()}${prefix.substring(1)} $number';
+  }
+  return key.replaceAll('_', ' ').trim();
+}
+
 class MyBookingsScreen extends StatefulWidget {
   const MyBookingsScreen({super.key, this.service});
 
@@ -45,11 +56,6 @@ class MyBookingsScreen extends StatefulWidget {
 
 class _MyBookingsScreenState extends State<MyBookingsScreen> {
   late final BookingService _service = widget.service ?? BookingService();
-
-  @override
-  void initState() {
-    super.initState();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -221,7 +227,6 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
     );
   }
 
-  // ── FIX 1: isScrollControlled: true added ──────────────────────────────────
   Future<void> _cancelBooking(BookingRecord booking) async {
     final reason = await showModalBottomSheet<String>(
       context: context,
@@ -285,13 +290,9 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> {
       ),
     );
   }
-
-  @override
-  void dispose() {
-    super.dispose();
-  }
 }
 
+// ── Empty state ───────────────────────────────────────────────────────────────
 class _BookingsEmptyState extends StatelessWidget {
   const _BookingsEmptyState({required this.uid});
 
@@ -319,14 +320,7 @@ class _BookingsEmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'This page shows bookings where user_uid matches your signed-in account.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 10),
-            SelectableText(
-              'Current uid: $uid',
+              'Your bookings will appear here once you make one.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: scheme.onSurfaceVariant),
@@ -338,6 +332,7 @@ class _BookingsEmptyState extends StatelessWidget {
   }
 }
 
+// ── Booking tile ──────────────────────────────────────────────────────────────
 class _BookingTile extends StatelessWidget {
   const _BookingTile({
     required this.booking,
@@ -395,6 +390,8 @@ class _BookingTile extends StatelessWidget {
       statusChipBg = const Color(0xFFFFF1F2);
       statusChipText = const Color(0xFFBF3B3B);
     }
+
+    final shuttleName = _prettifyShuttleKey(booking.shuttleKey);
 
     return Container(
       decoration: BoxDecoration(
@@ -462,7 +459,42 @@ class _BookingTile extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
+
+                      const SizedBox(height: 6),
+
+                      // Shuttle badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Color.alphaBlend(
+                            scheme.primaryContainer.withOpacity(0.45),
+                            Colors.white,
+                          ),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.directions_bus_rounded,
+                                size: 12, color: scheme.primary),
+                            const SizedBox(width: 4),
+                            Text(
+                              shuttleName,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: scheme.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 6),
+
                       Row(
                         children: [
                           Icon(
@@ -532,6 +564,7 @@ class _BookingTile extends StatelessWidget {
   }
 }
 
+// ── Booking details screen ────────────────────────────────────────────────────
 class BookingDetailsScreen extends StatefulWidget {
   const BookingDetailsScreen({
     super.key,
@@ -564,6 +597,8 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
               ? const Color(0xFFFFA726)
               : scheme.error;
 
+      final shuttleName = _prettifyShuttleKey(booking.shuttleKey);
+
       return Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
@@ -576,26 +611,59 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
           children: [
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  booking.status.toUpperCase(),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: statusColor,
-                    fontWeight: FontWeight.w800,
+            // Status + shuttle badge row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    booking.status.toUpperCase(),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: statusColor,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Color.alphaBlend(
+                      scheme.primaryContainer.withOpacity(0.45),
+                      Colors.white,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.directions_bus_rounded,
+                          size: 13, color: scheme.primary),
+                      const SizedBox(width: 5),
+                      Text(
+                        shuttleName,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
+
             const SizedBox(height: 12),
+
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -678,7 +746,9 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 ],
               ),
             ),
+
             const SizedBox(height: 16),
+
             Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
@@ -688,6 +758,11 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 padding: const EdgeInsets.all(12),
                 child: Column(
                   children: [
+                    _InfoRow(
+                      icon: Icons.directions_bus_rounded,
+                      label: 'Shuttle',
+                      value: shuttleName,
+                    ),
                     _InfoRow(
                       icon: Icons.location_on_outlined,
                       label: 'Pickup',
@@ -700,7 +775,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                     ),
                     _InfoRow(
                       icon: Icons.event,
-                      label: 'Shuttle Date',
+                      label: 'Date',
                       value: booking.createdAt != null
                           ? DateTime.fromMillisecondsSinceEpoch(
                               booking.createdAt!,
@@ -727,7 +802,9 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
                 ),
               ),
             ),
+
             const SizedBox(height: 18),
+
             SizedBox(
               width: double.infinity,
               height: 54,
@@ -807,7 +884,6 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
     }
   }
 
-  // ── FIX 2: isScrollControlled: true added ──────────────────────────────────
   Future<void> _cancelBooking() async {
     final reason = await showModalBottomSheet<String>(
       context: context,
@@ -874,6 +950,7 @@ class _BookingDetailsScreenState extends State<BookingDetailsScreen> {
   }
 }
 
+// ── Info row ──────────────────────────────────────────────────────────────────
 class _InfoRow extends StatelessWidget {
   const _InfoRow({
     required this.icon,
@@ -915,6 +992,7 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
+// ── Cancel reason sheet ───────────────────────────────────────────────────────
 class _CancelReasonSheet extends StatefulWidget {
   const _CancelReasonSheet();
 
@@ -952,7 +1030,6 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
     return _customReasonController.text.trim();
   }
 
-  // ── FIX 3: SizedBox at 60% screen height, isScrollControlled unlocks it ───
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -1020,6 +1097,7 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
   }
 }
 
+// ── QR dialog ─────────────────────────────────────────────────────────────────
 class _BookingQrDialog extends StatelessWidget {
   const _BookingQrDialog({required this.receipt});
 
