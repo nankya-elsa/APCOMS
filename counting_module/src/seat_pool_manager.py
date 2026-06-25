@@ -25,6 +25,8 @@ import sqlite3
 import json
 import logging
 
+from route_config import get_designated_stops
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,16 +148,12 @@ class SeatPoolManager:
             row = cursor.fetchone()
             current_stop_index = int(row[0]) if row else 0
 
-            cursor.execute(
-                "SELECT value FROM system_state WHERE key='designated_stops'"
-            )
-            row = cursor.fetchone()
-            stops = json.loads(row[0]) if row else []
-
             conn.close()
-        except (sqlite3.Error, ValueError, json.JSONDecodeError) as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error(f"Failed to read state for Firebase sync: {e}")
             return
+
+        stops = get_designated_stops(self.db_path)
 
         available_seats = self.get_current()
 

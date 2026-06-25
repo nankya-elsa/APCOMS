@@ -38,6 +38,7 @@ from no_show_canceller import NoShowCanceller
 from service_day_manager import ServiceDayManager
 from seat_pool_manager import SeatPoolManager
 from booking_firebase_listener import BookingFirebaseListener
+from route_config import get_designated_stops
 
 logger = logging.getLogger(__name__)
 
@@ -296,11 +297,13 @@ class ScannerOrchestrator:
             row = cursor.fetchone()
             conn.close()
             if row is None or row[0] is None:
-                return "Western Gate"
+                stops = get_designated_stops(self.db_path)
+                return stops[0] if stops else "Western Gate"
             return row[0]
         except sqlite3.Error as e:
             logger.error(f"Error reading current_stop: {e}")
-            return "Western Gate"
+            stops = get_designated_stops(self.db_path)
+            return stops[0] if stops else "Western Gate"
 
     def process_scan(self, payload, current_stop):
         """

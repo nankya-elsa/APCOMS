@@ -1,6 +1,7 @@
 import pytest
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -113,6 +114,7 @@ class TestCountingLogicInitialization:
         import sqlite3
         import json
         import os
+        os.environ.pop("DESIGNATED_STOPS", None)
         os.makedirs("local_database", exist_ok=True)
         stops = ["Stop A", "Stop B", "Stop C"]
         conn = sqlite3.connect(TEST_DB)
@@ -141,6 +143,7 @@ class TestCountingLogicInitialization:
         """
         import sqlite3
         import os
+        os.environ.pop("DESIGNATED_STOPS", None)
         os.makedirs("local_database", exist_ok=True)
         conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
@@ -165,6 +168,7 @@ class TestCountingLogicInitialization:
         """
         import sqlite3
         import os
+        os.environ.pop("DESIGNATED_STOPS", None)
         os.makedirs("local_database", exist_ok=True)
         conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
@@ -180,6 +184,44 @@ class TestCountingLogicInitialization:
 
         logic = CountingLogic(db_path=TEST_DB)
         assert len(logic.designated_stops_list) > 0
+
+    @patch.dict(os.environ, {"DESIGNATED_STOPS": "Stop A, Stop B, Stop C"}, clear=False)
+    def test_uses_env_designated_stops_when_available(self):
+        """
+        Test that designated stops are loaded from the environment
+        first so route changes can be made without editing code.
+        """
+        logic = CountingLogic(db_path=TEST_DB)
+        assert logic.designated_stops_list == ["Stop A", "Stop B", "Stop C"]
+
+    @patch.dict(os.environ, {"DESIGNATED_STOPS": "Stop A, Stop B, Stop C"}, clear=False)
+    def test_clamps_stale_stop_index_when_route_shortens(self):
+        """
+        Test that a persisted current_stop_index larger than the new
+        route length is safely reset so the system does not crash.
+        """
+        import sqlite3
+        os.makedirs("local_database", exist_ok=True)
+        conn = sqlite3.connect(TEST_DB)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO system_state (key, value)
+            VALUES ('current_stop_index', '99')
+        """)
+        conn.commit()
+        conn.close()
+
+        logic = CountingLogic(db_path=TEST_DB)
+        logic.initialize()
+
+        assert logic.current_stop_index == 0
+        assert logic.get_current_stop() == "Stop A"
 
 
 class TestDirectionDetermination:
@@ -244,6 +286,28 @@ class TestDirectionDetermination:
         counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         direction = counter.determine_direction(None)
         assert direction == "undetermined"
+
+    @patch.dict(os.environ, {"TOTAL_CAPACITY": "25"})
+    def test_total_capacity_falls_back_to_env_when_none_provided(self):
+        """
+        When the caller does NOT pass total_capacity, CountingLogic
+        should read it from the TOTAL_CAPACITY environment variable.
+        This matches the .env-driven deployment model: SHUTTLE_ID,
+        TOTAL_CAPACITY, DESIGNATED_STOPS etc. are all set per
+        deployment via .env rather than via the admin dashboard.
+        """
+        counter = CountingLogic(db_path=TEST_DB)
+        assert counter.total_capacity == 25
+
+    def test_total_capacity_defaults_to_20_when_env_not_set(self):
+        """
+        With neither a caller-provided total_capacity nor a
+        TOTAL_CAPACITY environment variable, fall back to the
+        hardcoded default of 20 seats.
+        """
+        with patch.dict(os.environ, {}, clear=True):
+            counter = CountingLogic(db_path=TEST_DB)
+            assert counter.total_capacity == 20
 
 
 class TestCountUpdating:

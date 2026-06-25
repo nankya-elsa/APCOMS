@@ -7,6 +7,8 @@ import sqlite3
 import csv
 import io
 
+from route_config import get_designated_stops
+
 logger = logging.getLogger(__name__)
 
 class FlaskDashboard:
@@ -703,16 +705,12 @@ class FlaskDashboard:
             analytics = self.generate_analytics()
             # get list of stops for export dropdown and total_capacity
             # for the Settings tab display-only fields
-            import sqlite3, json
+            import sqlite3
             stops = []
             total_capacity = 20
             try:
                 conn = sqlite3.connect("local_database/apcoms.db")
                 cursor = conn.cursor()
-                cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
-                row = cursor.fetchone()
-                if row:
-                    stops = json.loads(row[0])
                 cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
                 row = cursor.fetchone()
                 if row:
@@ -720,13 +718,7 @@ class FlaskDashboard:
                 conn.close()
             except Exception:
                 pass
-            # fallback to default stops if not set in system_state
-            if not stops:
-                stops = [
-                    "Western Gate", "CEDAT", "CONAS", "Main Library",
-                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
-                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
-                ]
+            stops = get_designated_stops("local_database/apcoms.db")
             return render_template("dashboard.html",
                                 data=data,
                                 analytics=analytics,
@@ -834,7 +826,6 @@ class FlaskDashboard:
                 # from the designated_stops list so Firebase reflects
                 # the shuttle's actual location, not a "Unknown" stub.
                 try:
-                    import json as _json
                     conn = sqlite3.connect("local_database/apcoms.db")
                     cursor = conn.cursor()
 
@@ -852,28 +843,9 @@ class FlaskDashboard:
                     row = cursor.fetchone()
                     current_stop_index = int(row[0]) if row else 0
 
-                    cursor.execute(
-                        "SELECT value FROM system_state "
-                        "WHERE key='designated_stops'"
-                    )
-                    row = cursor.fetchone()
-                    stops = []
-                    if row:
-                        try:
-                            stops = _json.loads(row[0])
-                        except Exception:
-                            pass
                     conn.close()
 
-                    if not stops:
-                        stops = [
-                            "Western Gate", "CEDAT", "CONAS",
-                            "Main Library", "Africa Hall",
-                            "Swimming Pool", "Mitchel Hall",
-                            "COCIS", "Complex Hall", "CEES",
-                            "Lumumba Hall",
-                        ]
-
+                    stops = get_designated_stops("local_database/apcoms.db")
                     next_index = (current_stop_index + 1) % len(stops)
                     next_stop = stops[next_index]
 
