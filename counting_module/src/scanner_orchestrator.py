@@ -603,117 +603,6 @@ class ScannerOrchestrator:
             "occupancy_status": status,
         }
 
-    def _start_booking_listener(self):
-        """
-        Attach the BookingFirebaseListener to Firebase /bookings.
-
-        Builds a SeatPoolManager + BookingFirebaseListener and
-        registers a stream handler that fires our listener's
-        on_booking_event for every booking change. The listener
-        runs in the background for the lifetime of this orchestrator.
-        """
-        self._ensure_firebase()
-
-        firebase_sync_for_listener = FirebaseSyncComponent(
-            shuttle_id=self.shuttle_id
-        )
-        firebase_sync_for_listener.initialize()
-        seat_pool = SeatPoolManager(
-            total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
-            db_path=self.db_path,
-            firebase_sync=firebase_sync_for_listener,
-        )
-        listener = BookingFirebaseListener(
-            shuttle_id=self.shuttle_id,
-            db_path=self.db_path,
-            seat_pool_manager=seat_pool,
-        )
-
-        def _handler(event):
-            # Firebase delivers updates in several shapes:
-            #   path=/                       initial full snapshot (data = all bookings)
-            #   path=/<booking_id>           whole booking OR a partial dict of changed fields
-            #   path=/<booking_id>/<field>   single field changed (data is a string/number)
-            #
-            # We can't trust the event's data to be complete -- on a
-            # multi-field update, Firebase may send only the changed
-            # subset. Always re-fetch the full booking when we have a
-            # specific booking_id, so the downstream listener has
-            # everything it needs (shuttle_key, status, cancel_reason).
-            path = (event.path or "").lstrip("/")
-            data = event.data
-
-            if not path:
-                # initial full snapshot -- iterate every booking
-                if isinstance(data, dict):
-                    for booking_id, booking_data in data.items():
-                        listener.on_booking_event(booking_id, booking_data)
-                return
-
-            booking_id = path.split("/")[0]
-
-            # always re-fetch the full booking to guarantee the
-            # downstream listener has shuttle_key + status + reason
-            try:
-                full = db.reference(f"bookings/{booking_id}").get()
-                if isinstance(full, dict):
-                    listener.on_booking_event(booking_id, full)
-            except Exception as e:
-                logger.error(
-                    f"Failed to fetch full booking {booking_id}: {e}"
-                )
-        try:
-            db.reference("bookings").listen(_handler)
-            logger.info("BookingFirebaseListener attached to /bookings")
-        except Exception as e:
-            logger.error(f"Failed to attach booking listener: {e}")
-
-        # Safety net: the streaming .listen() above catches new bookings
-        # reliably but misses modifications (cancels). A 2s poller
-        # routes those through the same listener for idempotent handling.
-        self._start_booking_poller(listener, poll_interval=2.0)
-
-    def _start_booking_poller(self, listener, poll_interval=2.0):
-        """
-        Poll Firebase /bookings every N seconds to catch booking
-        changes the streaming listener misses.
-
-        The firebase-admin Python SDK's .listen() reliably fires for
-        new bookings (child_added) but does NOT fire for modifications
-        to existing bookings (no child_changed semantics on its
-        streaming API). Cancels would otherwise go unnoticed until
-        the next orchestrator restart.
-
-        This poller is a safety net: every poll_interval seconds it
-        fetches the full /bookings snapshot and feeds each booking
-        through listener.on_booking_event. The existing SQLite
-        processed_bookings idempotency check (in BookingFirebaseListener)
-        ensures we only act on actual status transitions, so this is
-        safe to run alongside the streaming listener.
-
-        Runs in a daemon thread so it dies cleanly when the
-        orchestrator exits.
-        """
-        def _poll_loop():
-            while True:
-                try:
-                    all_bookings = db.reference("bookings").get()
-                    if isinstance(all_bookings, dict):
-                        for booking_id, booking_data in all_bookings.items():
-                            if isinstance(booking_data, dict):
-                                listener.on_booking_event(
-                                    booking_id, booking_data
-                                )
-                except Exception as e:
-                    logger.error(f"Booking poller error: {e}")
-                time.sleep(poll_interval)
-
-        thread = threading.Thread(target=_poll_loop, daemon=True)
-        thread.start()
-        logger.info(
-            f"Booking poller started (every {poll_interval}s)"
-        )
-
     def run(self):
         """
         Run the full orchestrator loop until the operator quits.
@@ -763,12 +652,6 @@ class ScannerOrchestrator:
         reset_date = service_day_manager.reset_if_needed()
         if reset_date:
             logger.info(f"Service-day reset performed for {reset_date}")
-
-        # Start the booking listener so book / user-cancel events from
-        # Cissy's app flow into the seat pool while the shuttle runs.
-        # The listener attaches to Firebase /bookings and stays live
-        # for the duration of the orchestrator loop.
-        self._start_booking_listener()
 
         try:
             while True:

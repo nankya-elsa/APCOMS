@@ -29,6 +29,28 @@ def main():
     dashboard = FlaskDashboard()
     dashboard.initialize()
 
+    # Start the booking listener as a background service. The
+    # dashboard is the canonical home for the listener because
+    # it runs 24/7, unlike the orchestrator which only runs
+    # during service hours. With the listener here, bookings
+    # made from the mobile app flow into the seat pool continuously
+    # regardless of whether the shuttle is operating. The
+    # orchestrator does NOT start its own listener so there is
+    # only ever one listener active at a time, eliminating the
+    # double-decrement race that two concurrent listeners would
+    # create.
+    from booking_listener_setup import start_booking_listener
+    shuttle_id = os.getenv("SHUTTLE_ID", "shuttle_001")
+    db_path = "local_database/apcoms.db"
+    _booking_listener = start_booking_listener(
+        shuttle_id=shuttle_id,
+        db_path=db_path,
+    )
+    logger.info(
+        f"Booking listener active for {shuttle_id} "
+        f"-- bookings flow into seat pool continuously"
+    )
+
     logger.info("Starting Flask server...")
     logger.info("Dashboard is accessible 24/7 - independent of shuttle operation")
     logger.info("=" * 60)
