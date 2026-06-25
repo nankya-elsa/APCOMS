@@ -11,7 +11,8 @@ import '../widgets/shuttle_location_map.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import '../services/shuttle_route_geometry_service.dart';
 import '../models/shuttle_route_geometry.dart';
-import '../services/device_location_service.dart';
+
+// ── REMOVED: device_location_service.dart import (no longer needed) ──────────
 
 class BookingScreen extends StatefulWidget {
   const BookingScreen({
@@ -34,9 +35,7 @@ class _BookingScreenState extends State<BookingScreen> {
   int? _pickupIndex;
   int? _destinationIndex;
   bool _isSubmitting = false;
-  bool _useDeviceLocation = false;
-  int? _minutesToCurrentStop;
-  int? _minutesToPickup;
+  // ── REMOVED: _useDeviceLocation, _minutesToCurrentStop, _minutesToPickup ────
 
   late final BookingService _service = widget.service ?? BookingService();
 
@@ -83,6 +82,7 @@ class _BookingScreenState extends State<BookingScreen> {
 
           return Stack(
             children: [
+              // ── Map: always uses pickup point, no device location branch ────
               StreamBuilder<ShuttleRouteGeometry?>(
                 stream: ShuttleRouteGeometryService().watchRoute(
                   shuttleKey: widget.trackedShuttleKey,
@@ -94,22 +94,9 @@ class _BookingScreenState extends State<BookingScreen> {
                   if (pickupIndex != null) {
                     final stopName = ShuttleRoute.stops[pickupIndex];
                     final stop = route?.findStopByName(stopName);
-                    if (stop != null)
+                    if (stop != null) {
                       pickupPoint = gmaps.LatLng(stop.lat, stop.lng);
-                  }
-
-                  if (_useDeviceLocation) {
-                    return StreamBuilder<gmaps.LatLng?>(
-                      stream: DeviceLocationService().watchDeviceLocation(),
-                      builder: (context, deviceSnap) {
-                        final devicePoint = deviceSnap.data;
-                        return ShuttleLocationMap(
-                          shuttleKey: widget.trackedShuttleKey,
-                          height: 380,
-                          targetLocation: devicePoint ?? pickupPoint,
-                        );
-                      },
-                    );
+                    }
                   }
 
                   return ShuttleLocationMap(
@@ -119,6 +106,7 @@ class _BookingScreenState extends State<BookingScreen> {
                   );
                 },
               ),
+
               Align(
                 alignment: Alignment.bottomCenter,
                 child: SafeArea(
@@ -138,79 +126,8 @@ class _BookingScreenState extends State<BookingScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_minutesToCurrentStop != null ||
-                            _minutesToPickup != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: Row(
-                              children: [
-                                if (_minutesToCurrentStop != null)
-                                  Expanded(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .outlineVariant
-                                              .withValues(alpha: 0.22),
-                                        ),
-                                      ),
-                                      child: Text(
-                                        'Bus ≈ ${_minutesToCurrentStop} min to current stop',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                    ),
-                                  ),
-                                if (_minutesToPickup != null) ...[
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .outlineVariant
-                                              .withValues(alpha: 0.22),
-                                        ),
-                                      ),
-                                      child: Text(
-                                        'Bus ≈ ${_minutesToPickup} min to your pickup',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            const Text('Use my location'),
-                            const SizedBox(width: 8),
-                            Switch(
-                              value: _useDeviceLocation,
-                              onChanged: (v) =>
-                                  setState(() => _useDeviceLocation = v),
-                            ),
-                          ],
-                        ),
+                        // ── REMOVED: ETA info row ────────────────────────────
+                        // ── REMOVED: "Use my location" Switch row ────────────
                         _LabeledField(
                           label: 'Pick Up',
                           controller: _pickupController,
@@ -244,8 +161,8 @@ class _BookingScreenState extends State<BookingScreen> {
                                     isLoadingSeats
                                         ? 'Loading seats...'
                                         : canBook
-                                        ? 'Reserve Seat'
-                                        : 'No free seats available',
+                                            ? 'Reserve Seat'
+                                            : 'No free seats available',
                                   ),
                           ),
                         ),
@@ -288,8 +205,6 @@ class _BookingScreenState extends State<BookingScreen> {
     final selected = await _pickStop(context, stops: stops);
     if (!mounted || selected == null) return;
 
-    // Map the selected stop name back to its absolute index in the master
-    // `ShuttleRoute.stops` list so we can store the canonical index.
     final selectedStopName = stops[selected];
     final resolvedIndex = ShuttleRoute.stops.indexOf(selectedStopName);
     if (resolvedIndex < 0) return;
@@ -361,6 +276,10 @@ class _BookingScreenState extends State<BookingScreen> {
         context: context,
         builder: (context) => _BookingQrDialog(receipt: receipt),
       );
+
+      // ── After QR dialog is dismissed, go back to the dashboard ─────────────
+      if (!mounted) return;
+      Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       _showSnack(context, 'Booking failed. ${e.toString()}');
@@ -394,6 +313,7 @@ class _BookingScreenState extends State<BookingScreen> {
     final reason = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (context) => const _CancelReasonSheet(),
     );
     if (!mounted || reason == null || reason.trim().isEmpty) return;
@@ -494,8 +414,8 @@ class _BookingHistoryTile extends StatelessWidget {
     final statusColor = statusLower == 'reserved'
         ? scheme.primary
         : statusLower == 'active'
-        ? const Color(0xFFFFA726)
-        : scheme.error;
+            ? const Color(0xFFFFA726)
+            : scheme.error;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -512,9 +432,8 @@ class _BookingHistoryTile extends StatelessWidget {
               Expanded(
                 child: Text(
                   '${booking.pickupStop} to ${booking.destinationStop}',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                  style: Theme.of(context).textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
               Text(
@@ -531,17 +450,15 @@ class _BookingHistoryTile extends StatelessWidget {
             'Ticket: ${booking.bookingId}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
           if ((booking.cancelReason ?? '').isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
               'Reason: ${booking.cancelReason}',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
           const SizedBox(height: 10),
@@ -600,47 +517,49 @@ class _CancelReasonSheetState extends State<_CancelReasonSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Cancel booking',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _selectedReason,
-              decoration: const InputDecoration(
-                labelText: 'Reason',
-                border: OutlineInputBorder(),
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.6,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Cancel booking',
+                style: Theme.of(context).textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w800),
               ),
-              items: _reasons
-                  .map(
-                    (reason) => DropdownMenuItem<String>(
-                      value: reason,
-                      child: Text(reason),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) => setState(() => _selectedReason = value),
-            ),
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: _selectedReason == null
-                    ? null
-                    : () => Navigator.of(context).pop(_selectedReason),
-                child: const Text('Confirm cancellation'),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _selectedReason,
+                decoration: const InputDecoration(
+                  labelText: 'Reason',
+                  border: OutlineInputBorder(),
+                ),
+                items: _reasons
+                    .map(
+                      (reason) => DropdownMenuItem<String>(
+                        value: reason,
+                        child: Text(reason),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() => _selectedReason = value),
               ),
-            ),
-          ],
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _selectedReason == null
+                      ? null
+                      : () => Navigator.of(context).pop(_selectedReason),
+                  child: const Text('Confirm cancellation'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -671,9 +590,8 @@ class _LabeledField extends StatelessWidget {
           width: 76,
           child: Text(
             label,
-            style: Theme.of(
-              context,
-            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+            style: Theme.of(context).textTheme.labelLarge
+                ?.copyWith(fontWeight: FontWeight.w700),
           ),
         ),
         const SizedBox(width: 10),
@@ -747,6 +665,7 @@ class _BookingQrDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
+          // ── Pops the dialog only; _submitBooking then pops BookingScreen ───
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Done'),
         ),

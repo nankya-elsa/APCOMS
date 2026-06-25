@@ -37,66 +37,68 @@ class DashboardHomeTab extends StatelessWidget {
           nameFallback: nameText,
         );
 
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            return SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: IntrinsicHeight(
-                  child: Padding(
-                    // Reduced top spacing so content starts closer to top.
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            avatar,
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    greeting,
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(color: Colors.black54),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    nameText,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(fontWeight: FontWeight.w700),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (role.isNotEmpty) _RolePill(role: role),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        _ShuttleCard(trackedShuttleKey: trackedShuttleKey),
-                        const SizedBox(height: 14),
-                        Text(
-                          'Booking',
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        _BookingEntryCard(
-                          trackedShuttleKey: trackedShuttleKey,
-                          uid: uid,
-                        ),
-                      ],
+        return SafeArea(
+          child: Padding(
+            // ── Pushed content further down with more top padding ─────────
+            padding: const EdgeInsets.fromLTRB(16, 56, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Greeting row ──────────────────────────────────────────
+                Row(
+                  children: [
+                    avatar,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            greeting,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: Colors.black54),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            nameText,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                    if (role.isNotEmpty) _RolePill(role: role),
+                  ],
                 ),
-              ),
-            );
-          },
+
+                const SizedBox(height: 20),
+
+                // ── Shuttle card ──────────────────────────────────────────
+                _ShuttleCard(trackedShuttleKey: trackedShuttleKey),
+
+                const SizedBox(height: 14),
+
+                // ── Booking section ───────────────────────────────────────
+                Text(
+                  'Booking',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+
+                _BookingEntryCard(
+                  trackedShuttleKey: trackedShuttleKey,
+                  uid: uid,
+                ),
+              ],
+            ),
+          ),
         );
       },
     );
@@ -119,19 +121,20 @@ class _Avatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final initial = nameFallback.isEmpty ? '?' : nameFallback.characters.first;
-    final _photo = photoUrl?.trim();
-    final hasPhoto = _photo?.isNotEmpty ?? false;
+    final photo = photoUrl?.trim();
+    final hasPhoto = photo?.isNotEmpty ?? false;
     return CircleAvatar(
       radius: 22,
       backgroundColor: hasPhoto
           ? Theme.of(context).colorScheme.primaryContainer
           : Colors.amber.shade200,
-      foregroundImage: hasPhoto ? NetworkImage(_photo!) : null,
+      foregroundImage: hasPhoto ? NetworkImage(photo!) : null,
       child: Text(
         initial.toUpperCase(),
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        style: Theme.of(context)
+            .textTheme
+            .titleMedium
+            ?.copyWith(fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -201,12 +204,12 @@ class _ShuttleCard extends StatelessWidget {
               return _cardShell(context, child: const _CardLoading());
             }
 
+            // ── Offline / error state ─────────────────────────────────────
             if (snapshot.hasError) {
               return _cardShell(
                 context,
-                child: Text(
-                  'Failed to load shuttle data.\n${snapshot.error}',
-                  style: Theme.of(context).textTheme.bodySmall,
+                child: _OfflineBanner(
+                  message: 'Could not reach Firebase. Check your connection.',
                 ),
               );
             }
@@ -222,7 +225,8 @@ class _ShuttleCard extends StatelessWidget {
                 ),
               );
             }
-            final data = raw is Map ? Map<String, Object?>.from(raw) : const {};
+            final data =
+                raw is Map ? Map<String, Object?>.from(raw) : const {};
 
             final locationRaw = data['location'];
             final location = locationRaw is Map
@@ -233,23 +237,20 @@ class _ShuttleCard extends StatelessWidget {
             final occupiedSeats = _readInt(data['current_count']);
             final reservedSeats = availability?.reservedSeats ?? 0;
             final availableSeats = rawAvailableSeats.clamp(0, 999).toInt();
-            final occupancyStatus = (data['occupancy_status'] as String?)
-                ?.trim();
+            final occupancyStatus =
+                (data['occupancy_status'] as String?)?.trim();
 
-            final currentStop =
-                (((data['current_stop'] as String?) ??
-                            (location?['current_stop'] as String?)) ??
-                        '')
-                    .trim();
-            final nextStop =
-                (((data['next_stop'] as String?) ??
-                            (location?['next_stop'] as String?)) ??
-                        '')
-                    .trim();
+            final currentStop = (((data['current_stop'] as String?) ??
+                        (location?['current_stop'] as String?)) ??
+                    '')
+                .trim();
+            final nextStop = (((data['next_stop'] as String?) ??
+                        (location?['next_stop'] as String?)) ??
+                    '')
+                .trim();
 
             final normalizedStatus = (occupancyStatus ?? '').toLowerCase();
             final hasHardFullStatus = normalizedStatus == 'full';
-
             final isFull = availableSeats <= 0 || hasHardFullStatus;
 
             final freeBg = Color.alphaBlend(
@@ -273,15 +274,15 @@ class _ShuttleCard extends StatelessWidget {
             final statusTitle = isFull
                 ? 'This shuttle is full'
                 : '${availableSeats.clamp(0, 999)} seats available!';
-            final statusSubtitle = isFull
-                ? 'Select another shuttle'
-                : 'Head to the next stop';
+            final statusSubtitle =
+                isFull ? 'Select another shuttle' : 'Head to the next stop';
 
             return _cardShell(
               context,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ── Header: logo + live/offline pill ───────────────────
                   Row(
                     children: [
                       Image.asset(
@@ -295,6 +296,8 @@ class _ShuttleCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
+
+                  // ── Seat stats ─────────────────────────────────────────
                   Row(
                     children: [
                       Expanded(
@@ -327,6 +330,8 @@ class _ShuttleCard extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
+
+                  // ── Current & next stop row (replaces placeholder) ──────
                   Row(
                     children: [
                       Icon(
@@ -336,25 +341,35 @@ class _ShuttleCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        '5 min away from you',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
+                        'At: ${currentStop.isEmpty ? '—' : currentStop}',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
                       ),
-                      const Spacer(),
-                      Flexible(
+                      const SizedBox(width: 10),
+                      Icon(
+                        Icons.arrow_forward,
+                        size: 14,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
                         child: Text(
-                          'Current: ${currentStop.isEmpty ? '—' : currentStop}  •  Next: ${nextStop.isEmpty ? '—' : nextStop}',
-                          textAlign: TextAlign.right,
+                          'Next: ${nextStop.isEmpty ? '—' : nextStop}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
                               ?.copyWith(color: scheme.onSurfaceVariant),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
+
+                  // ── Availability status banner ──────────────────────────
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(
@@ -370,7 +385,9 @@ class _ShuttleCard extends StatelessWidget {
                       children: [
                         Text(
                           statusTitle,
-                          style: Theme.of(context).textTheme.titleSmall
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
                               ?.copyWith(
                                 color: statusFg,
                                 fontWeight: FontWeight.w700,
@@ -379,7 +396,9 @@ class _ShuttleCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           statusSubtitle,
-                          style: Theme.of(context).textTheme.bodySmall
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
                               ?.copyWith(
                                 color: statusFg.withValues(alpha: 0.85),
                               ),
@@ -418,6 +437,53 @@ class _ShuttleCard extends StatelessWidget {
         ),
       ),
       child: child,
+    );
+  }
+}
+
+// ── Offline banner widget ───────────────────────────────────────────────────
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: scheme.errorContainer.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(Icons.wifi_off_rounded, size: 20, color: scheme.error),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Offline',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: scheme.error,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                message,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -485,6 +551,8 @@ class _StalenessPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+
+    // ── Stale = data is old ───────────────────────────────────────────────
     if (availability.isStale) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -496,15 +564,24 @@ class _StalenessPill extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: scheme.error.withValues(alpha: 0.12)),
         ),
-        child: Text(
-          'Stale • updated ${_fmt(availability.lastComputedAt)}',
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: scheme.error),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.wifi_off_rounded, size: 14, color: scheme.error),
+            const SizedBox(width: 4),
+            Text(
+              'Offline • ${_fmt(availability.lastComputedAt)}',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.error),
+            ),
+          ],
         ),
       );
     }
 
+    // ── Live = data is fresh ──────────────────────────────────────────────
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
@@ -522,9 +599,10 @@ class _StalenessPill extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             'Live',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.primary),
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: scheme.primary),
           ),
         ],
       ),
@@ -545,14 +623,20 @@ class _CardLoading extends StatelessWidget {
           child: CircularProgressIndicator(strokeWidth: 2),
         ),
         const SizedBox(width: 10),
-        Text('Loading shuttle…', style: Theme.of(context).textTheme.bodyMedium),
+        Text(
+          'Loading shuttle…',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
       ],
     );
   }
 }
 
 class _BookingEntryCard extends StatelessWidget {
-  const _BookingEntryCard({required this.trackedShuttleKey, required this.uid});
+  const _BookingEntryCard({
+    required this.trackedShuttleKey,
+    required this.uid,
+  });
 
   final String trackedShuttleKey;
   final String uid;
@@ -573,12 +657,11 @@ class _BookingEntryCard extends StatelessWidget {
 
         void action() {
           if (hasAnyActiveOrReserved) {
-            Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => MyBookingsScreen()));
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => MyBookingsScreen()),
+            );
             return;
           }
-
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) =>
@@ -634,9 +717,11 @@ class _BookingEntryCard extends StatelessWidget {
                               hasOnTrip
                                   ? 'You are on a trip'
                                   : hasReservedOnly
-                                  ? 'You have a reserved booking'
-                                  : 'Book a seat',
-                              style: Theme.of(context).textTheme.titleSmall
+                                      ? 'You have a reserved booking'
+                                      : 'Book a seat',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
                                   ?.copyWith(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(height: 2),
@@ -644,9 +729,11 @@ class _BookingEntryCard extends StatelessWidget {
                               hasOnTrip
                                   ? 'Scanner detected you as onboard. Safe travels! Details unavailable while onboard.'
                                   : hasReservedOnly
-                                  ? 'Cancel or complete it to make a new booking'
-                                  : 'Choose pick up and destination',
-                              style: Theme.of(context).textTheme.bodySmall
+                                      ? 'Cancel or complete it to make a new booking'
+                                      : 'Choose pick up and destination',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
                                   ?.copyWith(color: scheme.onSurfaceVariant),
                             ),
                           ],
