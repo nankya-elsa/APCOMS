@@ -150,9 +150,18 @@ class TestAuthentication:
         assert "Failed login attempt" in caplog.text
 
 
+@patch("service_day_manager.ServiceDayManager")
+@patch("firebase_sync.FirebaseSyncComponent")
 class TestDashboardRendering:
+    """
+    All tests in this class call render_dashboard() which triggers
+    check_end_of_day(). That method instantiates a real
+    FirebaseSyncComponent and ServiceDayManager. Patching both at
+    the class level prevents tests from reaching live Firebase
+    and from writing to the production SQLite database.
+    """
 
-    def test_render_dashboard_returns_dashboard_data(self):
+    def test_render_dashboard_returns_dashboard_data(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() returns a dictionary of dashboard
         data so the Flask template has all the information needed
@@ -163,7 +172,7 @@ class TestDashboardRendering:
         assert result is not None
         assert isinstance(result, dict)
 
-    def test_dashboard_data_contains_occupancy_info(self):
+    def test_dashboard_data_contains_occupancy_info(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() includes occupancy information
         so administrators can see current passenger count and
@@ -173,7 +182,7 @@ class TestDashboardRendering:
         result = dashboard.render_dashboard()
         assert "occupancy" in result
 
-    def test_dashboard_data_contains_system_status(self):
+    def test_dashboard_data_contains_system_status(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() includes system status so
         administrators can see whether the system is Active,
@@ -183,7 +192,7 @@ class TestDashboardRendering:
         result = dashboard.render_dashboard()
         assert "system_status" in result
 
-    def test_dashboard_data_contains_diagnostic_logs(self):
+    def test_dashboard_data_contains_diagnostic_logs(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() includes recent diagnostic logs
         so administrators can see system health and error messages

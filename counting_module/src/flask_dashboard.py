@@ -590,7 +590,7 @@ class FlaskDashboard:
         logger.info(f"Alert displayed on dashboard: {message}")
         return message
 
-    def setup_shuttle(self, shuttle_id, shuttle_name, total_capacity, designated_stops,
+    def setup_shuttle(self, shuttle_name, total_capacity, designated_stops,
                   day_start_time=None, day_end_time=None):
         """
         Writes shuttle configuration to SQLite system_state table
@@ -605,7 +605,7 @@ class FlaskDashboard:
         import json
 
         # require at least ONE field to be provided (so admin can update partial settings)
-        if not any([shuttle_id, shuttle_name, total_capacity, designated_stops, day_start_time, day_end_time]):
+        if not any([shuttle_name, total_capacity, designated_stops, day_start_time, day_end_time]):
             logger.warning("Shuttle setup failed - no fields provided")
             return False
 
@@ -625,12 +625,6 @@ class FlaskDashboard:
                     INSERT OR REPLACE INTO system_state (key, value)
                     VALUES ('designated_stops', ?)
                 """, (json.dumps(designated_stops),))
-
-            if shuttle_id:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('shuttle_id', ?)
-                """, (shuttle_id,))
 
             if shuttle_name:
                 cursor.execute("""
@@ -923,7 +917,6 @@ class FlaskDashboard:
             from flask import jsonify, request
             data = request.get_json()
             result = self.setup_shuttle(
-                shuttle_id=data.get("shuttle_id"),
                 shuttle_name=data.get("shuttle_name"),
                 total_capacity=data.get("total_capacity"),
                 designated_stops=data.get("designated_stops"),
