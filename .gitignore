@@ -1,4 +1,4 @@
-
+# gitignore
 # Virtual environment
 counting_module/venv/
 counting_module/.venv/
@@ -8,16 +8,20 @@ firebase_credentials.json
 serviceAccountKey.json
 *.json
 
+
 # Python cache files
 __pycache__/
 *.pyc
 *.pyo
 
+
 # Environment variables
 .env
 
+
 # VS Code settings
 .vscode/
+
 
 # Windows files
 Thumbs.db
