@@ -34,7 +34,7 @@ class FlaskDashboard:
         self._shutdown_requested = False
         self._last_published_capacity = None
         self._last_published_count = None
-        
+
         # Initialize Service Hours Manager for Firebase sync
         shuttle_id = os.getenv("SHUTTLE_ID", "shuttle_001")
         self.service_hours_manager = ServiceHoursManager(shuttle_id=shuttle_id)
@@ -47,7 +47,7 @@ class FlaskDashboard:
         to expose the dashboard publicly. Sets session timeout
         and logs success when dashboard is ready. Falls back to
         local access only if ngrok tunnel fails.
-        
+
         Also starts a background thread to sync service hours to Firebase
         every 5 minutes, so the mobile app can enforce booking restrictions.
         """
@@ -71,10 +71,10 @@ class FlaskDashboard:
             logger.info("=" * 60)
 
         self._sync_current_state_to_firebase(force=False)
-        
+
         # Start background thread to sync service hours to Firebase
         self._start_service_hours_sync_thread()
-        
+
         logger.info("Flask dashboard initialized successfully")
 
     def _start_service_hours_sync_thread(self):
@@ -84,7 +84,7 @@ class FlaskDashboard:
         """
         if self._service_hours_sync_thread is not None:
             return  # Already running
-        
+
         self._service_hours_sync_stop = False
         self._service_hours_sync_thread = threading.Thread(
             target=self._service_hours_sync_loop,
@@ -106,7 +106,7 @@ class FlaskDashboard:
                 self.service_hours_manager.check_and_sync()
             except Exception as e:
                 logger.error(f"Error in service hours sync loop: {e}")
-            
+
             # Sleep in small increments so we can respond to stop signal quickly
             for _ in range(int(sync_interval / 5)):
                 if self._service_hours_sync_stop:
@@ -123,7 +123,7 @@ class FlaskDashboard:
         self._service_hours_sync_stop = True
         if self._service_hours_sync_thread is not None:
             self._service_hours_sync_thread.join(timeout=5)
-        
+
         if self._shutdown_requested:
             return
         self._shutdown_requested = True

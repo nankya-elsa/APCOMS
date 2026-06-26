@@ -400,10 +400,10 @@ class TestPerformReset:
         from unittest.mock import patch
         # Mock designated stops to use custom list for this test
         test_stops = ["Main Library", "CEDAT", "CONAS"]
-        
+
         with patch('service_day_manager.get_designated_stops', return_value=test_stops):
             _seed_state(TEST_DB)  # Start with clean state
-            
+
             manager = ServiceDayManager(db_path=TEST_DB)
             manager.perform_reset(target_date="2026-05-14")
 
