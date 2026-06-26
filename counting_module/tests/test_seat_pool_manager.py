@@ -387,22 +387,29 @@ class TestFirebaseSyncPayload:
         payload = mock_sync.sync_to_firebase.call_args[0][0]
         assert payload["available_seats"] == 9
 
-    def test_payload_next_stop_wraps_around(self):
+    @pytest.mark.parametrize('current_idx,expected_next', [(3, 0)])
+    def test_payload_next_stop_wraps_around(self, current_idx, expected_next, monkeypatch):
         """
         When current_stop_index is the last stop, next_stop must
         wrap to index 0 (start of the route again). The same
         wraparound CountingLogic.advance_stop uses.
         """
-        _set_state("available_seats", 10)
-        _set_state("current_stop_index", 3)  # last of 4 stops
-        mock_sync = MagicMock()
-        manager = SeatPoolManager(
-            total_capacity=20, db_path=TEST_DB, firebase_sync=mock_sync
-        )
-        manager.increment(reason="alight")
+        from unittest.mock import patch
+        # Mock designated stops to be just 4 stops for this test
+        test_stops = ["Stop A", "Stop B", "Stop C", "Stop D"]
+        
+        with patch('seat_pool_manager.get_designated_stops', return_value=test_stops):
+            _set_state("available_seats", 10)
+            _set_state("current_stop_index", current_idx)  # last of 4 stops
+            mock_sync = MagicMock()
+            manager = SeatPoolManager(
+                total_capacity=20, db_path=TEST_DB, firebase_sync=mock_sync
+            )
+            manager.increment(reason="alight")
 
-        payload = mock_sync.sync_to_firebase.call_args[0][0]
-        assert payload["next_stop"] == "Western Gate"
+            payload = mock_sync.sync_to_firebase.call_args[0][0]
+            # After wraparound from index 3, next should be index 0 (Stop A)
+            assert payload["next_stop"] == test_stops[expected_next]
 
     def test_occupancy_status_available_when_seats_above_5(self):
         """

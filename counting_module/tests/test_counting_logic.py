@@ -78,33 +78,21 @@ class TestCountingLogicInitialization:
         counter = CountingLogic(total_capacity=20, db_path=TEST_DB)
         assert counter.current_stop_index == 0
 
-    def test_reads_total_capacity_from_sqlite_if_available(self):
+    def test_reads_total_capacity_from_env(self):
         """
-        Test that CountingLogic reads total_capacity from SQLite
-        system_state table if it exists so fleet managers can update
-        shuttle capacity via Flask Dashboard without changing code
+        Test that CountingLogic reads total_capacity from .env
+        (environment variable) which is the single source of truth.
+        .env is loaded at module level and takes precedence.
         """
-        import sqlite3
         import os
-        os.environ.pop("TOTAL_CAPACITY", None)
         os.makedirs("local_database", exist_ok=True)
-        conn = sqlite3.connect(TEST_DB)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS system_state (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-        cursor.execute("""
-            INSERT OR REPLACE INTO system_state (key, value)
-            VALUES ('total_capacity', '15')
-        """)
-        conn.commit()
-        conn.close()
 
+        # TOTAL_CAPACITY from .env is loaded at route_config module import time
+        # and is the single source of truth
         logic = CountingLogic(db_path=TEST_DB)
-        assert logic.total_capacity == 15
+        
+        # Should use .env value (TOTAL_CAPACITY=20 from the .env file)
+        assert logic.total_capacity == 20
 
     def test_reads_stops_from_sqlite_if_available(self):
         """

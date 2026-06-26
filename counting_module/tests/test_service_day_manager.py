@@ -397,16 +397,18 @@ class TestPerformReset:
         designated_stops list, kept in sync with current_stop_index=0.
         This fixes the old bug where index and name could drift.
         """
-        _seed_state(
-            TEST_DB,
-            designated_stops='["Main Library", "CEDAT", "CONAS"]',
-        )
+        from unittest.mock import patch
+        # Mock designated stops to use custom list for this test
+        test_stops = ["Main Library", "CEDAT", "CONAS"]
+        
+        with patch('service_day_manager.get_designated_stops', return_value=test_stops):
+            _seed_state(TEST_DB)  # Start with clean state
+            
+            manager = ServiceDayManager(db_path=TEST_DB)
+            manager.perform_reset(target_date="2026-05-14")
 
-        manager = ServiceDayManager(db_path=TEST_DB)
-        manager.perform_reset(target_date="2026-05-14")
-
-        assert _read_state(TEST_DB, "current_stop_index") == "0"
-        assert _read_state(TEST_DB, "current_stop") == "Main Library"
+            assert _read_state(TEST_DB, "current_stop_index") == "0"
+            assert _read_state(TEST_DB, "current_stop") == "Main Library"
 
     def test_reset_falls_back_to_default_capacity_when_missing(self):
         """
