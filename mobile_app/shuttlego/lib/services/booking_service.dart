@@ -382,6 +382,13 @@ class BookingService {
     final shuttleData = shuttleRaw is Map
         ? Map<String, Object?>.from(shuttleRaw as Map)
         : const <String, Object?>{};
+    // Enforce service hours if configured on the shuttle. If start/end are
+    // missing or unparsable, allow booking (don't block).
+    try {
+      _ensureWithinServiceHours(shuttleData);
+    } catch (e) {
+      throw BookingException(e.toString());
+    }
     final cameraAvailableSeats = _readInt(shuttleData['available_seats']);
     final reservedSeats = await _fetchActiveReservationCount(shuttleKey);
     final bookableSeats = cameraAvailableSeats - reservedSeats;
@@ -529,6 +536,45 @@ class BookingService {
       equalTo: shuttleKey,
     );
     return _countActiveReservations(val);
+  }
+
+  // Parse a time string like "06:00" into minutes since midnight.
+  static int? _parseTimeToMinutes(Object? value) {
+    if (value == null) return null;
+    final s = value is String ? value.trim() : value.toString();
+    final match = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(s);
+    if (match == null) return null;
+    final h = int.tryParse(match.group(1) ?? '');
+    final m = int.tryParse(match.group(2) ?? '');
+    if (h == null || m == null) return null;
+    if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+    return h * 60 + m;
+  }
+
+  void _ensureWithinServiceHours(Map<String, Object?> shuttleData) {
+    final startMins = _parseTimeToMinutes(shuttleData['service_start_time']);
+    final endMins = _parseTimeToMinutes(shuttleData['service_end_time']);
+    if (startMins == null || endMins == null) return; // no restriction
+
+    final now = DateTime.now();
+    final nowMins = now.hour * 60 + now.minute;
+
+    final within = startMins <= endMins
+        ? (nowMins >= startMins && nowMins <= endMins)
+        : (nowMins >= startMins || nowMins <= endMins); // overnight range
+
+    if (!within) {
+      final custom = shuttleData['service_block_message'];
+      final startStr = shuttleData['service_start_time']?.toString() ?? '';
+      final endStr = shuttleData['service_end_time']?.toString() ?? '';
+      final defaultMsg = startStr.isNotEmpty && endStr.isNotEmpty
+          ? 'Shuttle not available at this time. The shuttle will operate from $startStr to $endStr today.'
+          : 'Shuttle not available at this time.';
+      final msg = (custom is String && custom.trim().isNotEmpty)
+          ? custom.trim()
+          : defaultMsg;
+      throw BookingException(msg);
+    }
   }
 
   /// Compute derived availability and persist it in a dedicated top-level
