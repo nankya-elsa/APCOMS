@@ -1,11 +1,17 @@
 import logging
 import os
+import signal
+import sys
 from flask import Flask
 import sqlite3
 import datetime
 import sqlite3
 import csv
 import io
+import threading
+
+from route_config import get_designated_stops, get_total_capacity
+from service_hours_manager import ServiceHoursManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +30,16 @@ class FlaskDashboard:
         self.failed_login_attempts = 0
         self.account_locked = False
         self.ngrok_url = None
+        self._ngrok_tunnel = None
+        self._shutdown_requested = False
+        self._last_published_capacity = None
+        self._last_published_count = None
+        
+        # Initialize Service Hours Manager for Firebase sync
+        shuttle_id = os.getenv("SHUTTLE_ID", "shuttle_001")
+        self.service_hours_manager = ServiceHoursManager(shuttle_id=shuttle_id)
+        self._service_hours_sync_thread = None
+        self._service_hours_sync_stop = False
 
     def initialize(self):
         """
@@ -31,6 +47,9 @@ class FlaskDashboard:
         to expose the dashboard publicly. Sets session timeout
         and logs success when dashboard is ready. Falls back to
         local access only if ngrok tunnel fails.
+        
+        Also starts a background thread to sync service hours to Firebase
+        every 5 minutes, so the mobile app can enforce booking restrictions.
         """
         self.setup_routes()
         try:
@@ -39,6 +58,7 @@ class FlaskDashboard:
             if token:
                 ngrok.set_auth_token(token)
             tunnel = ngrok.connect(5000)
+            self._ngrok_tunnel = tunnel
             self.ngrok_url = tunnel.public_url
             logger.info("=" * 60)
             logger.info(f"DASHBOARD URL: {self.ngrok_url}")
@@ -50,7 +70,77 @@ class FlaskDashboard:
             logger.info("LOCAL URL: http://localhost:5000")
             logger.info("=" * 60)
 
+        self._sync_current_state_to_firebase(force=False)
+        
+        # Start background thread to sync service hours to Firebase
+        self._start_service_hours_sync_thread()
+        
         logger.info("Flask dashboard initialized successfully")
+
+    def _start_service_hours_sync_thread(self):
+        """
+        Start a background thread that periodically syncs service hours
+        from the database to Firebase every 5 minutes.
+        """
+        if self._service_hours_sync_thread is not None:
+            return  # Already running
+        
+        self._service_hours_sync_stop = False
+        self._service_hours_sync_thread = threading.Thread(
+            target=self._service_hours_sync_loop,
+            daemon=True,
+            name="ServiceHoursSyncThread"
+        )
+        self._service_hours_sync_thread.start()
+        logger.info("Service hours sync thread started")
+
+    def _service_hours_sync_loop(self):
+        """
+        Background loop that checks and syncs service hours to Firebase
+        every 5 minutes (300 seconds). Runs until _service_hours_sync_stop
+        is set to True or the dashboard shuts down.
+        """
+        sync_interval = 300  # 5 minutes
+        while not self._service_hours_sync_stop:
+            try:
+                self.service_hours_manager.check_and_sync()
+            except Exception as e:
+                logger.error(f"Error in service hours sync loop: {e}")
+            
+            # Sleep in small increments so we can respond to stop signal quickly
+            for _ in range(int(sync_interval / 5)):
+                if self._service_hours_sync_stop:
+                    break
+                threading.Event().wait(5)  # Sleep 5 seconds at a time
+
+    def shutdown(self):
+        """
+        Stop the Flask app and any active ngrok tunnel so Ctrl+C
+        exits cleanly instead of hanging on the tunnel teardown.
+        Also stops the service hours sync background thread.
+        """
+        # Stop service hours sync thread
+        self._service_hours_sync_stop = True
+        if self._service_hours_sync_thread is not None:
+            self._service_hours_sync_thread.join(timeout=5)
+        
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
+
+        try:
+            if self._ngrok_tunnel is not None:
+                from pyngrok import ngrok
+                ngrok.disconnect(self._ngrok_tunnel.public_url)
+                self._ngrok_tunnel = None
+        except Exception as exc:
+            logger.warning(f"Failed to disconnect ngrok tunnel: {exc}")
+
+        try:
+            if hasattr(self.app, "server") and self.app.server is not None:
+                self.app.server.shutdown()
+        except Exception as exc:
+            logger.warning(f"Failed to shut down Flask server: {exc}")
 
     def authenticate(self, username, password):
         """
@@ -79,6 +169,72 @@ class FlaskDashboard:
                 logger.warning("Failed login attempt")
             return False
 
+    def _cancel_live_bookings_for_reset(self, bookings_ref=None, shuttle_id=None):
+        """
+        Cancel any live reserved/active bookings during an admin reset.
+
+        This keeps the booking stream consistent with the cleared
+        live counts: reserved seats disappear from the dashboard and
+        the mobile app instead of lingering as phantom holds.
+        """
+        if bookings_ref is None:
+            try:
+                from firebase_admin import db
+                bookings_ref = db.reference("bookings")
+            except Exception:
+                return 0
+
+        target_shuttle = shuttle_id or os.getenv("SHUTTLE_ID", "shuttle_001")
+
+        try:
+            all_bookings = bookings_ref.get()
+        except Exception as exc:
+            logger.error(f"Admin reset booking cancellation failed: {exc}")
+            return 0
+
+        if not all_bookings or not isinstance(all_bookings, dict):
+            return 0
+
+        timestamp = datetime.datetime.now().isoformat()
+        update_payload = {}
+        cancel_count = 0
+
+        for booking_id, booking_data in all_bookings.items():
+            if not isinstance(booking_data, dict):
+                continue
+            if booking_data.get("shuttle_key") != target_shuttle:
+                continue
+            status = booking_data.get("status")
+            if status not in ("reserved", "active"):
+                continue
+
+            user_uid = booking_data.get("user_uid")
+
+            update_payload[f"bookings/{booking_id}/status"] = "cancelled"
+            update_payload[f"bookings/{booking_id}/cancel_reason"] = "reset_by_admin"
+            update_payload[f"bookings/{booking_id}/cancelled_at"] = timestamp
+
+            if user_uid:
+                update_payload[f"user_bookings/{user_uid}/{booking_id}/status"] = "cancelled"
+                update_payload[f"user_bookings/{user_uid}/{booking_id}/cancel_reason"] = "reset_by_admin"
+                update_payload[f"user_bookings/{user_uid}/{booking_id}/cancelled_at"] = timestamp
+
+            cancel_count += 1
+
+        if cancel_count == 0:
+            return 0
+
+        try:
+            from firebase_admin import db as _fb_db
+            _fb_db.reference("/").update(update_payload)
+            logger.info(
+                f"Cancelled {cancel_count} live booking(s) during admin reset"
+            )
+            return cancel_count
+        except Exception as exc:
+            logger.error(f"Admin reset booking cancellation failed: {exc}")
+            return 0
+
     def check_end_of_day(self):
         """
         Triggers the daily service-day reset if one is due.
@@ -97,8 +253,12 @@ class FlaskDashboard:
         """
         from service_day_manager import ServiceDayManager
         from firebase_sync import FirebaseSyncComponent
-        from firebase_admin import db
         import os as _os
+
+        try:
+            from firebase_admin import db
+        except Exception:
+            db = None
 
         try:
             shuttle_id = _os.getenv("SHUTTLE_ID", "shuttle_001")
@@ -116,10 +276,11 @@ class FlaskDashboard:
             # up yesterday's reserved/active bookings. Without these
             # args the stale-cancel step silently no-ops and stale
             # bookings survive into today.
+            bookings_ref = db.reference("bookings") if db is not None else None
             manager = ServiceDayManager(
                 db_path="local_database/apcoms.db",
                 firebase_sync=firebase_sync,
-                bookings_ref=db.reference("bookings"),
+                bookings_ref=bookings_ref,
                 shuttle_id=shuttle_id,
             )
             reset_date = manager.reset_if_needed()
@@ -129,6 +290,101 @@ class FlaskDashboard:
                 )
         except Exception as e:
             logger.error(f"Error during service-day check: {e}")
+
+    def _sync_current_state_to_firebase(self, total_capacity=None, force=False):
+        """
+        Publish the current occupancy snapshot to Firebase immediately.
+        This keeps the mobile app and dashboard in sync even when the
+        capacity changes without a booking/cancel event firing.
+        """
+        from firebase_sync import FirebaseSyncComponent
+        import os as _os
+
+        if total_capacity is None:
+            total_capacity = self._get_total_capacity()
+
+        try:
+            conn = sqlite3.connect("local_database/apcoms.db")
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT value FROM system_state WHERE key='current_count'"
+            )
+            row = cursor.fetchone()
+            current_count = int(row[0]) if row else 0
+
+            cursor.execute(
+                "SELECT value FROM system_state WHERE key='current_stop'"
+            )
+            row = cursor.fetchone()
+            current_stop = row[0] if row else "Unknown"
+
+            cursor.execute(
+                "SELECT value FROM system_state WHERE key='current_stop_index'"
+            )
+            row = cursor.fetchone()
+            current_stop_index = int(row[0]) if row else 0
+
+            cursor.execute(
+                "SELECT value FROM system_state WHERE key='available_seats'"
+            )
+            row = cursor.fetchone()
+            sqlite_available_seats = int(row[0]) if row else None
+
+            conn.close()
+        except Exception as exc:
+            logger.warning(f"Could not read live state for Firebase sync: {exc}")
+            return False
+
+        if not force and (
+            self._last_published_capacity == total_capacity and
+            self._last_published_count == current_count
+        ):
+            return True
+
+        stops = get_designated_stops("local_database/apcoms.db")
+        next_index = (current_stop_index + 1) % len(stops) if stops else 0
+        next_stop = stops[next_index] if stops else "Unknown"
+        if sqlite_available_seats is not None:
+            available_seats = min(sqlite_available_seats, int(total_capacity))
+        else:
+            available_seats = max(int(total_capacity) - current_count, 0)
+
+        if available_seats > 5:
+            occupancy_status = "Available"
+        elif available_seats >= 1:
+            occupancy_status = "Nearly Full"
+        else:
+            occupancy_status = "Full"
+
+        payload = {
+            "passenger_count": current_count,
+            "available_seats": available_seats,
+            "occupancy_status": occupancy_status,
+            "current_stop": current_stop,
+            "next_stop": next_stop,
+        }
+
+        try:
+            firebase_sync = FirebaseSyncComponent(
+                shuttle_id=_os.getenv("SHUTTLE_ID", "shuttle_001")
+            )
+            firebase_sync.initialize()
+            firebase_sync.sync_to_firebase(payload)
+            self._last_published_capacity = total_capacity
+            self._last_published_count = current_count
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to push occupancy snapshot to Firebase: {exc}")
+            return False
+
+    def _get_total_capacity(self, db_path="local_database/apcoms.db"):
+        """
+        Resolve the shuttle total capacity using the same precedence
+        as the counting logic: explicit caller value, environment,
+        SQLite, then default.
+        """
+        return get_total_capacity(db_path=db_path, default=20)
 
     def render_dashboard(self):
         """
@@ -140,9 +396,11 @@ class FlaskDashboard:
         # check if we need to perform end-of-day reset
         self.check_end_of_day()
 
+        capacity = self._get_total_capacity()
+        self._sync_current_state_to_firebase(total_capacity=capacity, force=False)
         occupancy = {
             "current_count": 0,
-            "available_seats": 20,
+            "available_seats": capacity,
             "occupancy_status": "Available",
             "current_stop": "Unknown",
             "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -205,7 +463,9 @@ class FlaskDashboard:
             cursor.execute("SELECT value FROM system_state WHERE key='available_seats'")
             row = cursor.fetchone()
             if row:
-                occupancy["available_seats"] = int(row[0])
+                occupancy["available_seats"] = min(int(row[0]), capacity)
+            else:
+                occupancy["available_seats"] = capacity
 
             cursor.execute("SELECT value FROM system_state WHERE key='current_stop'")
             row = cursor.fetchone()
@@ -590,7 +850,7 @@ class FlaskDashboard:
         logger.info(f"Alert displayed on dashboard: {message}")
         return message
 
-    def setup_shuttle(self, shuttle_id, shuttle_name, total_capacity, designated_stops,
+    def setup_shuttle(self, shuttle_name, total_capacity, designated_stops,
                   day_start_time=None, day_end_time=None):
         """
         Writes shuttle configuration to SQLite system_state table
@@ -605,7 +865,7 @@ class FlaskDashboard:
         import json
 
         # require at least ONE field to be provided (so admin can update partial settings)
-        if not any([shuttle_id, shuttle_name, total_capacity, designated_stops, day_start_time, day_end_time]):
+        if not any([shuttle_name, total_capacity, designated_stops, day_start_time, day_end_time]):
             logger.warning("Shuttle setup failed - no fields provided")
             return False
 
@@ -620,17 +880,28 @@ class FlaskDashboard:
                     VALUES ('total_capacity', ?)
                 """, (str(total_capacity),))
 
+                current_count = 0
+                try:
+                    cursor.execute(
+                        "SELECT value FROM system_state WHERE key='current_count'"
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0] is not None:
+                        current_count = int(row[0])
+                except Exception:
+                    current_count = 0
+
+                available_seats = max(int(str(total_capacity).strip()) - current_count, 0)
+                cursor.execute("""
+                    INSERT OR REPLACE INTO system_state (key, value)
+                    VALUES ('available_seats', ?)
+                """, (str(available_seats),))
+
             if designated_stops:
                 cursor.execute("""
                     INSERT OR REPLACE INTO system_state (key, value)
                     VALUES ('designated_stops', ?)
                 """, (json.dumps(designated_stops),))
-
-            if shuttle_id:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_state (key, value)
-                    VALUES ('shuttle_id', ?)
-                """, (shuttle_id,))
 
             if shuttle_name:
                 cursor.execute("""
@@ -653,6 +924,20 @@ class FlaskDashboard:
 
             conn.commit()
             conn.close()
+
+            resolved_capacity = None
+            if total_capacity is not None and str(total_capacity).strip():
+                try:
+                    resolved_capacity = int(str(total_capacity).strip())
+                except (TypeError, ValueError):
+                    resolved_capacity = None
+            if resolved_capacity is None:
+                resolved_capacity = self._get_total_capacity()
+
+            self._sync_current_state_to_firebase(
+                total_capacity=resolved_capacity,
+                force=True,
+            )
             logger.info("Shuttle setup completed successfully")
             return True
 
@@ -709,30 +994,10 @@ class FlaskDashboard:
             analytics = self.generate_analytics()
             # get list of stops for export dropdown and total_capacity
             # for the Settings tab display-only fields
-            import sqlite3, json
+            import sqlite3
             stops = []
-            total_capacity = 20
-            try:
-                conn = sqlite3.connect("local_database/apcoms.db")
-                cursor = conn.cursor()
-                cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
-                row = cursor.fetchone()
-                if row:
-                    stops = json.loads(row[0])
-                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
-                row = cursor.fetchone()
-                if row:
-                    total_capacity = int(row[0])
-                conn.close()
-            except Exception:
-                pass
-            # fallback to default stops if not set in system_state
-            if not stops:
-                stops = [
-                    "Western Gate", "CEDAT", "CONAS", "Main Library",
-                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
-                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
-                ]
+            total_capacity = self._get_total_capacity()
+            stops = get_designated_stops("local_database/apcoms.db")
             return render_template("dashboard.html",
                                 data=data,
                                 analytics=analytics,
@@ -790,13 +1055,7 @@ class FlaskDashboard:
                 conn = sqlite3.connect("local_database/apcoms.db")
                 cursor = conn.cursor()
 
-                # read total_capacity to restore available_seats
-                cursor.execute(
-                    "SELECT value FROM system_state "
-                    "WHERE key='total_capacity'"
-                )
-                row = cursor.fetchone()
-                total_capacity = int(row[0]) if row else 20
+                total_capacity = self._get_total_capacity()
 
                 # write fresh count + seats
                 cursor.execute(
@@ -814,6 +1073,20 @@ class FlaskDashboard:
                 )
                 conn.commit()
                 conn.close()
+
+                # cancel any live reserved/active bookings so the
+                # booking stream matches the cleared live counts.
+                try:
+                    from firebase_admin import db
+                    bookings_ref = db.reference("bookings")
+                    self._cancel_live_bookings_for_reset(
+                        bookings_ref=bookings_ref,
+                        shuttle_id=os.getenv("SHUTTLE_ID", "shuttle_001"),
+                    )
+                except Exception as reset_booking_err:
+                    logger.error(
+                        f"Failed to cancel live bookings during admin reset: {reset_booking_err}"
+                    )
 
                 # write a diagnostic audit log via DataLogger so the
                 # reset shows up in the Recent Diagnostic Logs panel
@@ -840,7 +1113,6 @@ class FlaskDashboard:
                 # from the designated_stops list so Firebase reflects
                 # the shuttle's actual location, not a "Unknown" stub.
                 try:
-                    import json as _json
                     conn = sqlite3.connect("local_database/apcoms.db")
                     cursor = conn.cursor()
 
@@ -858,28 +1130,9 @@ class FlaskDashboard:
                     row = cursor.fetchone()
                     current_stop_index = int(row[0]) if row else 0
 
-                    cursor.execute(
-                        "SELECT value FROM system_state "
-                        "WHERE key='designated_stops'"
-                    )
-                    row = cursor.fetchone()
-                    stops = []
-                    if row:
-                        try:
-                            stops = _json.loads(row[0])
-                        except Exception:
-                            pass
                     conn.close()
 
-                    if not stops:
-                        stops = [
-                            "Western Gate", "CEDAT", "CONAS",
-                            "Main Library", "Africa Hall",
-                            "Swimming Pool", "Mitchel Hall",
-                            "COCIS", "Complex Hall", "CEES",
-                            "Lumumba Hall",
-                        ]
-
+                    stops = get_designated_stops("local_database/apcoms.db")
                     next_index = (current_stop_index + 1) % len(stops)
                     next_stop = stops[next_index]
 
@@ -923,7 +1176,6 @@ class FlaskDashboard:
             from flask import jsonify, request
             data = request.get_json()
             result = self.setup_shuttle(
-                shuttle_id=data.get("shuttle_id"),
                 shuttle_name=data.get("shuttle_name"),
                 total_capacity=data.get("total_capacity"),
                 designated_stops=data.get("designated_stops"),

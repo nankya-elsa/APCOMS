@@ -400,6 +400,7 @@ class BookingDashboardService:
           pickup_stop           - origin stop name
           destination_stop      - destination stop name
           status                - 'reserved' / 'active' / 'completed' / 'cancelled'
+          cancel_reason         - reason string if cancelled, empty string otherwise
           created_at_display    - human-readable timestamp string
                                   ('YYYY-MM-DD HH:MM:SS') or '-' if missing
 
@@ -441,11 +442,15 @@ class BookingDashboardService:
             else:
                 created_at_display = "-"
 
+            status = booking.get("status", "unknown")
+            cancel_reason = booking.get("cancel_reason", "") if status == "cancelled" else ""
+
             result.append({
                 "booking_id": booking_id,
                 "pickup_stop": booking.get("pickup_stop", "-"),
                 "destination_stop": booking.get("destination_stop", "-"),
-                "status": booking.get("status", "unknown"),
+                "status": status,
+                "cancel_reason": cancel_reason,
                 "created_at_display": created_at_display,
                 "_sort_key": created_at if created_at else 0,
             })

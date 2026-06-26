@@ -1,6 +1,8 @@
 import sys
 import os
 import logging
+import signal
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
@@ -29,6 +31,14 @@ def main():
     dashboard = FlaskDashboard()
     dashboard.initialize()
 
+    def _handle_shutdown(signum, frame):
+        logger.info("Shutdown requested via signal, stopping dashboard...")
+        dashboard.shutdown()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
     # Start the booking listener as a background service. The
     # dashboard is the canonical home for the listener because
     # it runs 24/7, unlike the orchestrator which only runs
@@ -55,12 +65,23 @@ def main():
     logger.info("Dashboard is accessible 24/7 - independent of shuttle operation")
     logger.info("=" * 60)
 
-    dashboard.app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False,
-        use_reloader=False
-    )
+    try:
+        dashboard.app.run(
+            host="0.0.0.0",
+            port=5000,
+            debug=False,
+            use_reloader=False
+        )
+    except KeyboardInterrupt:
+        dashboard.shutdown()
+        logger.info("Dashboard stopped")
+        if "pytest" not in sys.modules:
+            os._exit(0)
+    except SystemExit:
+        dashboard.shutdown()
+        logger.info("Dashboard stopped")
+        if "pytest" not in sys.modules:
+            os._exit(0)
 
 
 if __name__ == "__main__":

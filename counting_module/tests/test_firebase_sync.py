@@ -18,7 +18,7 @@ class TestFirebaseSyncInitialization:
         system has a sync component ready to push occupancy data to
         Firebase Realtime Database
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         assert sync is not None
 
     def test_shuttle_id_is_stored_correctly(self):
@@ -27,8 +27,8 @@ class TestFirebaseSyncInitialization:
         system knows which shuttle's data to push to Firebase and
         the mobile app can identify the correct shuttle
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
-        assert sync.shuttle_id == "shuttle_001"
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
+        assert sync.shuttle_id == "test_shuttle_isolated"
 
     def test_network_status_is_disconnected_before_initialization(self):
         """
@@ -36,7 +36,7 @@ class TestFirebaseSyncInitialization:
         is called to confirm the system is not attempting to sync
         before a Firebase connection has been established
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         assert sync.network_status == "disconnected"
 
     def test_offline_queue_is_empty_before_initialization(self):
@@ -45,7 +45,7 @@ class TestFirebaseSyncInitialization:
         to confirm no stale queued updates exist when the system
         first starts up
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         assert sync.offline_queue == []
 
     @pytest.mark.skipif(not FIREBASE_AVAILABLE, reason="Firebase credentials not available in CI")
@@ -55,7 +55,7 @@ class TestFirebaseSyncInitialization:
         is called successfully so the system knows it can push
         occupancy data to Firebase Realtime Database
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         assert sync.network_status == "connected"
 
@@ -67,7 +67,7 @@ class TestFirebaseSyncInitialization:
         sync component is ready to push occupancy data
         """
         import logging
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         with caplog.at_level(logging.INFO):
             sync.initialize()
         assert "Firebase connection established" in caplog.text
@@ -82,7 +82,7 @@ class TestSyncToFirebase:
         successfully pushed to Firebase so the system knows the
         occupancy update reached the mobile app
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -101,7 +101,7 @@ class TestSyncToFirebase:
         payload so the mobile app can display accurate occupancy numbers
         to students checking seat availability
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -121,7 +121,7 @@ class TestSyncToFirebase:
         payload so the mobile app can show students exactly how many
         seats are left before they go to the shuttle stop
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -141,7 +141,7 @@ class TestSyncToFirebase:
         payload so the mobile app can display the correct color coded
         status badge to students
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -161,7 +161,7 @@ class TestSyncToFirebase:
         payload so the mobile app can show students the shuttle's
         current location along the campus route
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -181,7 +181,7 @@ class TestSyncToFirebase:
         so the mobile app can inform students where the shuttle is
         heading next along the predefined campus route
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -201,7 +201,7 @@ class TestSyncToFirebase:
         so the mobile app can show students when the data was last
         refreshed and warn them if data is stale
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 8,
@@ -220,7 +220,7 @@ class TestSyncToFirebase:
         network is unavailable so no occupancy updates are lost during
         network outages as required by FR-CM-6.3
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.network_status = "offline"
         occupancy_data = {
             "passenger_count": 8,
@@ -239,7 +239,7 @@ class TestSyncToFirebase:
         and not reaching the mobile app in real time
         """
         import logging
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.network_status = "offline"
         occupancy_data = {
             "passenger_count": 8,
@@ -261,7 +261,7 @@ class TestOfflineQueue:
         the system begins with a clean slate and no stale queued
         updates from previous sessions
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         assert sync.offline_queue == []
 
     def test_adds_to_queue_when_offline(self):
@@ -270,7 +270,7 @@ class TestOfflineQueue:
         offline queue when network is unavailable to ensure no
         updates are lost during network outages
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.network_status = "offline"
         occupancy_data = {
             "passenger_count": 5,
@@ -289,7 +289,7 @@ class TestOfflineQueue:
         queued updates to Firebase so the system does not send
         duplicate updates when connectivity is restored
         """
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 5,
@@ -310,7 +310,7 @@ class TestOfflineQueue:
         the offline queue has been cleared successfully
         """
         import logging
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         occupancy_data = {
             "passenger_count": 5,
@@ -335,7 +335,7 @@ class TestConnectivityMonitoring:
         pushing occupancy updates to the mobile app
         """
         import logging
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.initialize()
         with caplog.at_level(logging.INFO):
             sync.monitor_connectivity()
@@ -348,7 +348,7 @@ class TestConnectivityMonitoring:
         queue mode without crashing
         """
         import logging
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.network_status = "offline"
         sync.firebase_ref = None
         with caplog.at_level(logging.WARNING):
@@ -362,7 +362,7 @@ class TestConnectivityMonitoring:
         that the shuttle has lost Firebase connectivity
         """
         import logging
-        sync = FirebaseSyncComponent(shuttle_id="shuttle_001")
+        sync = FirebaseSyncComponent(shuttle_id="test_shuttle_isolated")
         sync.network_status = "offline"
         sync.firebase_ref = None
         with caplog.at_level(logging.WARNING):

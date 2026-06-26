@@ -46,6 +46,8 @@ import datetime
 import logging
 import sqlite3
 
+from route_config import get_designated_stops, get_total_capacity
+
 logger = logging.getLogger(__name__)
 
 
@@ -292,30 +294,14 @@ class ServiceDayManager:
                 )
             """)
 
-            # read total_capacity for available_seats; default 20
-            cursor.execute(
-                "SELECT value FROM system_state WHERE key='total_capacity'"
+            total_capacity = get_total_capacity(
+                db_path=self.db_path,
+                default=20,
             )
-            row = cursor.fetchone()
-            total_capacity = row[0] if row else "20"
 
             # read designated_stops to get the first stop name; default Western Gate
-            cursor.execute(
-                "SELECT value FROM system_state WHERE key='designated_stops'"
-            )
-            row = cursor.fetchone()
-            first_stop = "Western Gate"
-            if row and row[0]:
-                try:
-                    import json
-                    stops = json.loads(row[0])
-                    if isinstance(stops, list) and len(stops) > 0:
-                        first_stop = stops[0]
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(
-                        "designated_stops not valid JSON list; "
-                        "using default first stop 'Western Gate'"
-                    )
+            stops = get_designated_stops(self.db_path)
+            first_stop = stops[0] if stops else "Western Gate"
 
             # apply all live-state writes in a single batch
             resets = [
@@ -372,26 +358,7 @@ class ServiceDayManager:
             # designated_stops is absent from SQLite — keeps Firebase
             # consistent even on a fresh deployment where the
             # operator hasn't saved a stops configuration yet.
-            DEFAULT_STOPS = [
-                "Western Gate", "CEDAT", "CONAS", "Main Library",
-                "Africa Hall", "Swimming Pool", "Mitchel Hall",
-                "COCIS", "Complex Hall", "CEES", "Lumumba Hall",
-            ]
-            stops_list = DEFAULT_STOPS
-            try:
-                import json as _json
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT value FROM system_state WHERE key='designated_stops'"
-                )
-                row = cursor.fetchone()
-                conn.close()
-                if row and row[0]:
-                    stops_list = _json.loads(row[0])
-            except (sqlite3.Error, ValueError):
-                pass  # keep the default
-
+            stops_list = get_designated_stops(self.db_path)
             next_stop = stops_list[1] if len(stops_list) > 1 else first_stop
 
             payload = {

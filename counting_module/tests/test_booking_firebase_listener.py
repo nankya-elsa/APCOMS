@@ -341,6 +341,29 @@ class TestUserCancellationEvents:
 
         mock_pool.increment.assert_not_called()
 
+    def test_admin_reset_cancellation_is_skipped(self):
+        """
+        Admin-triggered resets already clear the seat pool to capacity
+        and cancel the live bookings. The listener must not release
+        seats a second time for those cancellations.
+        """
+        mock_pool = MagicMock()
+        listener = BookingFirebaseListener(
+            shuttle_id="shuttle_001",
+            db_path=TEST_DB,
+            seat_pool_manager=mock_pool,
+        )
+        listener._mark_processed("booking_xyz", "reserved")
+
+        listener.on_booking_event("booking_xyz", {
+            "booking_id": "booking_xyz",
+            "shuttle_key": "shuttle_001",
+            "status": "cancelled",
+            "cancel_reason": "reset_by_admin",
+        })
+
+        mock_pool.increment.assert_not_called()
+
     def test_cancellation_without_prior_reserved_is_skipped(self):
         """
         If the booking was never seen as reserved (e.g. the

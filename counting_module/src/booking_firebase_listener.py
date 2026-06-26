@@ -58,6 +58,7 @@ class BookingFirebaseListener:
 
     NO_SHOW_REASON = "no_show_at_pickup"
     STALE_REASON = "stale_from_previous_day"
+    RESET_REASON = "reset_by_admin"
 
     def __init__(self, shuttle_id=None, db_path=None, seat_pool_manager=None):
         if seat_pool_manager is None:
@@ -157,6 +158,9 @@ class BookingFirebaseListener:
             total_capacity at the service-day boundary, before
             flipping stale bookings to cancelled. Incrementing here
             would push the seat pool above capacity.)
+          - cancel_reason == 'reset_by_admin'
+            (the admin reset already reset the seat pool to capacity
+            and cancelled the live bookings itself)
           - last_status != 'reserved' (never saw the original hold,
             no seat to release)
         """
@@ -165,7 +169,11 @@ class BookingFirebaseListener:
         # Reasons where the cancellation's writer already handled
         # the seat math themselves. The listener must NOT also
         # increment for these or available_seats drifts high.
-        externally_handled = (self.NO_SHOW_REASON, self.STALE_REASON)
+        externally_handled = (
+            self.NO_SHOW_REASON,
+            self.STALE_REASON,
+            self.RESET_REASON,
+        )
         if cancel_reason in externally_handled:
             logger.info(
                 f"Booking {booking_id} cancelled ({cancel_reason}) -- "

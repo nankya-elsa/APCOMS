@@ -2,6 +2,8 @@ import sqlite3
 import logging
 import os
 
+from route_config import get_designated_stops, get_total_capacity
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,43 +36,20 @@ class CountingLogic:
         except Exception:
             pass
 
-        # read total_capacity from SQLite if not provided
-        if total_capacity is None:
-            try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute("SELECT value FROM system_state WHERE key='total_capacity'")
-                row = cursor.fetchone()
-                self.total_capacity = int(row[0]) if row else 20
-                conn.close()
-            except Exception:
-                self.total_capacity = 20
-        else:
+        # total_capacity sourcing — explicit constructor arg wins,
+        # then .env (deployment-level override), then SQLite system_state,
+        # then hardcoded default.
+        if total_capacity is not None:
             self.total_capacity = total_capacity
+        else:
+            self.total_capacity = get_total_capacity(
+                db_path=self.db_path,
+                default=20,
+            )
 
         self.available_seats = self.total_capacity
 
-        # read stops from SQLite if available
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT value FROM system_state WHERE key='designated_stops'")
-            row = cursor.fetchone()
-            if row:
-                self.designated_stops_list = json.loads(row[0])
-            else:
-                self.designated_stops_list = [
-                    "Western Gate", "CEDAT", "CONAS", "Main Library",
-                    "Africa Hall", "Swimming Pool", "Mitchel Hall",
-                    "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
-                ]
-            conn.close()
-        except Exception:
-            self.designated_stops_list = [
-                "Western Gate", "CEDAT", "CONAS", "Main Library",
-                "Africa Hall", "Swimming Pool", "Mitchel Hall",
-                "COCIS", "Complex Hall", "CEES", "Lumumba Hall"
-            ]
+        self.designated_stops_list = get_designated_stops(self.db_path)
 
     def initialize(self):
         """
@@ -124,7 +103,19 @@ class CountingLogic:
         cursor.execute("SELECT value FROM system_state WHERE key='current_stop_index'")
         stop_result = cursor.fetchone()
         if stop_result:
-            self.current_stop_index = int(stop_result[0])
+            try:
+                self.current_stop_index = int(stop_result[0])
+            except (ValueError, TypeError):
+                self.current_stop_index = 0
+
+        if not self.designated_stops_list:
+            self.designated_stops_list = ["Western Gate"]
+
+        if self.current_stop_index >= len(self.designated_stops_list):
+            self.current_stop_index = 0
+            logger.warning(
+                "current_stop_index out of range for configured stops; resetting to 0"
+            )
 
         conn.close()
         logger.info("Counting Logic initialized successfully")
@@ -263,6 +254,10 @@ class CountingLogic:
         based on the current stop index so the mobile app and Firebase
         can display accurate shuttle location to students
         """
+        if not self.designated_stops_list:
+            self.designated_stops_list = ["Western Gate"]
+        if self.current_stop_index >= len(self.designated_stops_list):
+            self.current_stop_index = 0
         return self.designated_stops_list[self.current_stop_index]
 
     def advance_stop(self):

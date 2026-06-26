@@ -150,9 +150,18 @@ class TestAuthentication:
         assert "Failed login attempt" in caplog.text
 
 
+@patch("service_day_manager.ServiceDayManager")
+@patch("firebase_sync.FirebaseSyncComponent")
 class TestDashboardRendering:
+    """
+    All tests in this class call render_dashboard() which triggers
+    check_end_of_day(). That method instantiates a real
+    FirebaseSyncComponent and ServiceDayManager. Patching both at
+    the class level prevents tests from reaching live Firebase
+    and from writing to the production SQLite database.
+    """
 
-    def test_render_dashboard_returns_dashboard_data(self):
+    def test_render_dashboard_returns_dashboard_data(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() returns a dictionary of dashboard
         data so the Flask template has all the information needed
@@ -163,7 +172,7 @@ class TestDashboardRendering:
         assert result is not None
         assert isinstance(result, dict)
 
-    def test_dashboard_data_contains_occupancy_info(self):
+    def test_dashboard_data_contains_occupancy_info(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() includes occupancy information
         so administrators can see current passenger count and
@@ -173,7 +182,7 @@ class TestDashboardRendering:
         result = dashboard.render_dashboard()
         assert "occupancy" in result
 
-    def test_dashboard_data_contains_system_status(self):
+    def test_dashboard_data_contains_system_status(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() includes system status so
         administrators can see whether the system is Active,
@@ -183,7 +192,49 @@ class TestDashboardRendering:
         result = dashboard.render_dashboard()
         assert "system_status" in result
 
-    def test_dashboard_data_contains_diagnostic_logs(self):
+    def test_total_capacity_helper_prefers_env_value(self, mock_firebase_class, mock_service_day_class, monkeypatch):
+        """
+        Test that the dashboard resolves TOTAL_CAPACITY from the
+        environment before falling back to SQLite so operators can
+        change the shuttle size via .env without editing the DB.
+        """
+        import sqlite3
+
+        monkeypatch.setenv("TOTAL_CAPACITY", "15")
+
+        conn = sqlite3.connect("local_database/apcoms.db")
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS system_state (key TEXT PRIMARY KEY, value TEXT)")
+        cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('total_capacity', '10')")
+        conn.commit()
+        conn.close()
+
+        dashboard = FlaskDashboard()
+
+        assert dashboard._get_total_capacity() == 15
+
+    def test_render_dashboard_uses_env_capacity_over_stale_sqlite_seats(self, mock_firebase_class, mock_service_day_class, monkeypatch):
+        """
+        Test that the dashboard uses the env-based capacity instead of
+        a stale SQLite available_seats value so UI changes appear immediately.
+        """
+        import sqlite3
+
+        monkeypatch.setenv("TOTAL_CAPACITY", "15")
+
+        conn = sqlite3.connect("local_database/apcoms.db")
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS system_state (key TEXT PRIMARY KEY, value TEXT)")
+        cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('available_seats', '25')")
+        conn.commit()
+        conn.close()
+
+        dashboard = FlaskDashboard()
+        result = dashboard.render_dashboard()
+
+        assert result["occupancy"]["available_seats"] == 15
+
+    def test_dashboard_data_contains_diagnostic_logs(self, mock_firebase_class, mock_service_day_class):
         """
         Test that render_dashboard() includes recent diagnostic logs
         so administrators can see system health and error messages
@@ -414,6 +465,66 @@ class TestEndOfDayResetWiring:
     survive into today.
     """
 
+    def test_admin_reset_cancels_reserved_bookings_with_reset_reason(self):
+        """
+        The emergency reset should cancel any live reserved or active
+        bookings so the dashboard no longer shows phantom holds after
+        the operator clears the live counts. Writes go through the
+        root reference so bookings/ and user_bookings/ paths both
+        resolve correctly.
+        """
+        class FakeBookingsRef:
+            def get(self):
+                return {
+                    "booking_1": {
+                        "status": "reserved",
+                        "shuttle_key": "shuttle_001",
+                        "user_uid": "user_1",
+                    },
+                    "booking_2": {
+                        "status": "active",
+                        "shuttle_key": "shuttle_001",
+                        "user_uid": "user_2",
+                    },
+                    "booking_3": {
+                        "status": "completed",
+                        "shuttle_key": "shuttle_001",
+                        "user_uid": "user_3",
+                    },
+                    "booking_4": {
+                        "status": "reserved",
+                        "shuttle_key": "shuttle_999",
+                        "user_uid": "user_4",
+                    },
+                }
+
+        captured = {}
+
+        class FakeRootRef:
+            def update(self, payload):
+                captured.update(payload)
+
+        import sys, types
+        fake_db = types.SimpleNamespace(reference=lambda path: FakeRootRef())
+        fake_firebase_admin = types.SimpleNamespace(db=fake_db)
+
+        with patch.dict(sys.modules, {"firebase_admin": fake_firebase_admin,
+                                      "firebase_admin.db": fake_db}):
+            dashboard = FlaskDashboard()
+            dashboard._cancel_live_bookings_for_reset(
+                bookings_ref=FakeBookingsRef(),
+                shuttle_id="shuttle_001",
+            )
+
+        assert captured["bookings/booking_1/status"] == "cancelled"
+        assert captured["bookings/booking_2/status"] == "cancelled"
+        assert captured["bookings/booking_1/cancel_reason"] == "reset_by_admin"
+        assert captured["bookings/booking_2/cancel_reason"] == "reset_by_admin"
+        assert captured["user_bookings/user_1/booking_1/status"] == "cancelled"
+        assert captured["user_bookings/user_2/booking_2/status"] == "cancelled"
+        assert "bookings/booking_3/status" not in captured
+        assert "bookings/booking_4/status" not in captured
+
     @patch("flask_dashboard.FlaskDashboard.check_end_of_day", autospec=True)
     def test_render_dashboard_still_calls_check_end_of_day(
         self, mock_check
@@ -430,14 +541,12 @@ class TestEndOfDayResetWiring:
             pass  # we only care that check_end_of_day was called
         mock_check.assert_called_once()
 
-    @patch("firebase_admin.db.reference")
     @patch("service_day_manager.ServiceDayManager")
     @patch("firebase_sync.FirebaseSyncComponent")
     def test_check_end_of_day_passes_bookings_ref_and_shuttle_id(
         self,
         mock_firebase_sync_class,
         mock_manager_class,
-        mock_db_reference,
     ):
         """
         ServiceDayManager must be constructed with bookings_ref
@@ -447,11 +556,16 @@ class TestEndOfDayResetWiring:
         bookings from yesterday survive into today.
         """
         import os
-        os.environ["SHUTTLE_ID"] = "shuttle_001"
-        mock_db_reference.return_value = "BOOKINGS_REF_SENTINEL"
+        import sys
+        import types
 
-        dashboard = FlaskDashboard()
-        dashboard.check_end_of_day()
+        os.environ["SHUTTLE_ID"] = "shuttle_001"
+        fake_db = types.SimpleNamespace(reference=lambda *_args, **_kwargs: "BOOKINGS_REF_SENTINEL")
+        fake_firebase_admin = types.SimpleNamespace(db=fake_db)
+
+        with patch.dict(sys.modules, {"firebase_admin": fake_firebase_admin}):
+            dashboard = FlaskDashboard()
+            dashboard.check_end_of_day()
 
         mock_manager_class.assert_called_once()
         kwargs = mock_manager_class.call_args.kwargs
@@ -463,5 +577,4 @@ class TestEndOfDayResetWiring:
             "ServiceDayManager must receive shuttle_id so it "
             "knows which shuttle's bookings to clean up"
         )
-        mock_db_reference.assert_called_with("bookings")
 
