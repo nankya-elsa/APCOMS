@@ -12,6 +12,7 @@ monitoring for a driverless campus e-shuttle.
 
 - Nankya Elsa (22/U/21893) - Counting Module
 - Musiimenta Cissylyn (22/U/6402) - Mobile Application
+- Kisembo Bangirana Rodgers (20/U/2036/EVE) - Administration Dashboard
 
 ### Project Structure
 
