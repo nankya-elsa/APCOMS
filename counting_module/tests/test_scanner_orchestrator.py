@@ -279,7 +279,7 @@ class TestRunScanQueue:
         briefly to give the next passenger time to step up and
         unlock their phone. We mock time.sleep so the test runs
         instantly but assert it was called with the expected
-        pause duration.
+        pause duration. Increased to 3 seconds for better demo visibility.
         """
         mock_validator = MagicMock()
         mock_validator.validate_scan.return_value = {
@@ -303,8 +303,8 @@ class TestRunScanQueue:
         orchestrator = ScannerOrchestrator(db_path=TEST_DB)
         orchestrator.run_scan_queue(current_stop="CONAS")
 
-        # at least one sleep call with 2-second pause between scans
-        mock_sleep.assert_called_with(2)
+        # at least one sleep call with 3-second pause between scans
+        mock_sleep.assert_called_with(3)
 
     @patch("scanner_orchestrator.time.sleep")
     @patch("scanner_orchestrator.BookingValidator")

@@ -33,6 +33,7 @@ from firebase_admin import db
 from firebase_sync import FirebaseSyncComponent
 from seat_pool_manager import SeatPoolManager
 from booking_firebase_listener import BookingFirebaseListener
+from route_config import get_total_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,13 @@ def start_booking_listener(shuttle_id, db_path, poll_interval=2.0):
     firebase_sync = FirebaseSyncComponent(shuttle_id=shuttle_id)
     firebase_sync.initialize()
 
+    total_capacity = get_total_capacity(
+        db_path=db_path,
+        default=20,
+    )
+
     seat_pool = SeatPoolManager(
-        total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+        total_capacity=total_capacity,
         db_path=db_path,
         firebase_sync=firebase_sync,
     )

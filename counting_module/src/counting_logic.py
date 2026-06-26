@@ -2,7 +2,7 @@ import sqlite3
 import logging
 import os
 
-from route_config import get_designated_stops
+from route_config import get_designated_stops, get_total_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -37,24 +37,15 @@ class CountingLogic:
             pass
 
         # total_capacity sourcing — explicit constructor arg wins,
-        # then SQLite system_state, then .env, then hardcoded default.
+        # then .env (deployment-level override), then SQLite system_state,
+        # then hardcoded default.
         if total_capacity is not None:
             self.total_capacity = total_capacity
         else:
-            try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT value FROM system_state WHERE key='total_capacity'"
-                )
-                row = cursor.fetchone()
-                conn.close()
-                if row and row[0] is not None:
-                    self.total_capacity = int(row[0])
-                else:
-                    self.total_capacity = int(os.getenv("TOTAL_CAPACITY", "20"))
-            except (sqlite3.Error, ValueError, TypeError):
-                self.total_capacity = int(os.getenv("TOTAL_CAPACITY", "20"))
+            self.total_capacity = get_total_capacity(
+                db_path=self.db_path,
+                default=20,
+            )
 
         self.available_seats = self.total_capacity
 

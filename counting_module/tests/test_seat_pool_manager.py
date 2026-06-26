@@ -134,6 +134,25 @@ class TestGetCurrent:
         manager = SeatPoolManager(total_capacity=20, db_path=TEST_DB)
         assert manager.get_current() == 20
 
+    def test_firebase_payload_honors_env_total_capacity_over_stale_sqlite_value(self, monkeypatch):
+        """
+        Firebase payloads should use the env-based effective capacity
+        instead of stale SQLite seat values when the shuttle size changes.
+        """
+        monkeypatch.setenv("TOTAL_CAPACITY", "15")
+        _set_state("available_seats", 25)
+        _set_state("current_count", 0)
+        _set_state("current_stop", "CONAS")
+        _set_state("current_stop_index", 2)
+        _set_state("designated_stops", json.dumps(["A", "B", "CONAS", "D"]))
+
+        mock_sync = MagicMock()
+        manager = SeatPoolManager(total_capacity=20, db_path=TEST_DB, firebase_sync=mock_sync)
+        manager._sync_to_firebase()
+
+        payload = mock_sync.sync_to_firebase.call_args[0][0]
+        assert payload["available_seats"] == 15
+
     def test_handles_non_integer_stored_value_gracefully(self):
         """
         If something corrupts available_seats to a non-integer
@@ -144,6 +163,26 @@ class TestGetCurrent:
         _set_state("available_seats", "not_a_number")
         manager = SeatPoolManager(total_capacity=20, db_path=TEST_DB)
         assert manager.get_current() == 20
+
+    def test_blank_env_capacity_falls_back_to_default_capacity(self, monkeypatch):
+        """
+        A blank TOTAL_CAPACITY in the environment should behave like
+        an unset value and not allow a stale SQLite seat count to
+        override the effective capacity.
+        """
+        monkeypatch.setenv("TOTAL_CAPACITY", "")
+        _set_state("available_seats", 10)
+        _set_state("current_count", 0)
+        _set_state("current_stop", "CONAS")
+        _set_state("current_stop_index", 2)
+        _set_state("designated_stops", json.dumps(["A", "B", "CONAS", "D"]))
+
+        mock_sync = MagicMock()
+        manager = SeatPoolManager(total_capacity=20, db_path=TEST_DB, firebase_sync=mock_sync)
+        manager._sync_to_firebase()
+
+        payload = mock_sync.sync_to_firebase.call_args[0][0]
+        assert payload["available_seats"] == 20
 
 
 class TestIncrement:

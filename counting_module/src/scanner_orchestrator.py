@@ -38,7 +38,8 @@ from no_show_canceller import NoShowCanceller
 from service_day_manager import ServiceDayManager
 from seat_pool_manager import SeatPoolManager
 from booking_firebase_listener import BookingFirebaseListener
-from route_config import get_designated_stops
+from data_logger import DataLogger
+from route_config import get_designated_stops, get_total_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class ScannerOrchestrator:
         """
         self.db_path = db_path or "local_database/apcoms.db"
         self.shuttle_id = os.getenv("SHUTTLE_ID", "shuttle_001")
+        self.data_logger = DataLogger(shuttle_id=self.shuttle_id, db_path=self.db_path)
 
     def _ensure_firebase(self):
         """
@@ -407,8 +409,9 @@ class ScannerOrchestrator:
                 scan_count += 1
 
             # brief pause before reopening the camera so the next
-            # passenger has time to step up and unlock their phone
-            time.sleep(2)
+            # passenger has time to step up and unlock their phone.
+            # Increased to 3 seconds for better demo visibility.
+            time.sleep(3)
 
         return scan_count
 
@@ -481,8 +484,13 @@ class ScannerOrchestrator:
         # SeatPoolManager wired with the shared sync so every seat
         # release (no-show or otherwise) propagates to Firebase
         # the moment it happens.
+        total_capacity = get_total_capacity(
+            db_path=self.db_path,
+            default=20,
+        )
+
         seat_pool = SeatPoolManager(
-            total_capacity=int(os.getenv("TOTAL_CAPACITY", "20")),
+            total_capacity=total_capacity,
             db_path=self.db_path,
             firebase_sync=firebase,
         )
@@ -606,6 +614,141 @@ class ScannerOrchestrator:
             "occupancy_status": status,
         }
 
+    def _get_expected_alighting_count(self, current_stop):
+        """
+        Query Firebase bookings to find how many passengers are
+        expected to alight at the current_stop.
+
+        Returns the count of bookings with:
+          - status: 'active' (passenger is on board)
+          - destination_stop: current_stop (this is their stop)
+
+        Returns 0 if no bookings match or if Firebase is unavailable.
+        """
+        try:
+            self._ensure_firebase()
+            bookings_ref = db.reference("/bookings")
+            bookings = bookings_ref.get()
+
+            if not bookings:
+                return 0
+
+            count = 0
+            for booking_id, booking in bookings.items():
+                if isinstance(booking, dict):
+                    status = booking.get("status")
+                    destination = booking.get("destination_stop")
+
+                    if status == "active" and destination == current_stop:
+                        count += 1
+
+            return count
+        except Exception as e:
+            logger.warning(
+                f"Failed to get expected alighting count: {e}"
+            )
+            return 0
+
+    def _get_session_counts(self):
+        """
+        Query the passenger_events table to get the total number of
+        boarding and alighting events logged during the current session.
+
+        Returns a dict with:
+          - boarded_count: total 'boarding' events
+          - alighted_count: total 'alighting' events
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Count boarding events
+            cursor.execute("""
+                SELECT COUNT(*) FROM passenger_events
+                WHERE direction = 'boarding'
+            """)
+            boarded_count = cursor.fetchone()[0] or 0
+
+            # Count alighting events
+            cursor.execute("""
+                SELECT COUNT(*) FROM passenger_events
+                WHERE direction = 'alighting'
+            """)
+            alighted_count = cursor.fetchone()[0] or 0
+
+            conn.close()
+            return {
+                "boarded_count": boarded_count,
+                "alighted_count": alighted_count,
+            }
+        except Exception as e:
+            logger.warning(
+                f"Failed to query stop session counts: {e}"
+            )
+            return {"boarded_count": 0, "alighted_count": 0}
+
+    def _check_and_log_mismatches(self, scan_count, current_stop, counts_before):
+        """
+        After main.py completes, compare expected vs actual counts
+        and generate diagnostic alerts for any mismatches.
+
+        Checks:
+          1. BOARDING MISMATCH: If more people were detected boarding
+             than scanned, it indicates unauthorized boarding (someone
+             sneaked in without scanning).
+          2. ALIGHTING MISMATCH: If fewer people were detected alighting
+             than expected (based on bookings with destination = current_stop),
+             it indicates passengers who haven't exited at their stop yet.
+
+        Args:
+            scan_count: Number of people who successfully scanned at
+                       this stop (from run_scan_queue).
+            current_stop: The current shuttle stop.
+            counts_before: Dict with 'boarded_count' and 'alighted_count'
+                          captured before main.py ran.
+        """
+        try:
+            counts_after = self._get_session_counts()
+
+            # Calculate counts for this stop only (difference)
+            actual_boarded = counts_after["boarded_count"] - counts_before["boarded_count"]
+            actual_alighted = counts_after["alighted_count"] - counts_before["alighted_count"]
+            expected_alighted = self._get_expected_alighting_count(current_stop)
+
+            # Check 1: BOARDING MISMATCH
+            # If scan_count < actual_boarded, someone unauthorized boarded
+            if scan_count > 0 and actual_boarded > scan_count:
+                unauthorized_count = actual_boarded - scan_count
+                message = (
+                    f"[UNAUTHORIZED BOARDING DETECTED] {scan_count} person(s) scanned, "
+                    f"but {actual_boarded} boarded. {unauthorized_count} person(s) "
+                    f"sneaked in without scanning at {current_stop}"
+                )
+                logger.warning(message)
+                self.data_logger.log_diagnostic({
+                    "log_type": "warning",
+                    "message": message,
+                })
+
+            # Check 2: ALIGHTING MISMATCH
+            # If expected_alighted > actual_alighted, someone didn't get out
+            if expected_alighted > 0 and actual_alighted < expected_alighted:
+                didnt_alight = expected_alighted - actual_alighted
+                message = (
+                    f"[ALIGHTING SHORTFALL] {expected_alighted} passenger(s) expected to "
+                    f"alight at {current_stop}, but only {actual_alighted} alighted. "
+                    f"{didnt_alight} passenger(s) did not exit at their stop"
+                )
+                logger.warning(message)
+                self.data_logger.log_diagnostic({
+                    "log_type": "warning",
+                    "message": message,
+                })
+        except Exception as e:
+            logger.error(
+                f"Error checking boarding/alighting mismatches: {e}"
+            )
+
     def run(self):
         """
         Run the full orchestrator loop until the operator quits.
@@ -674,8 +817,10 @@ class ScannerOrchestrator:
                     )
                     self.advance_and_sync()
                     # brief pause so this isn't a tight loop that
-                    # blasts through 11 stops in milliseconds
-                    time.sleep(1)
+                    # blasts through 11 stops in milliseconds.
+                    # Increased to 2 seconds so panelists can see
+                    # the transition clearly during the demo.
+                    time.sleep(2)
                     continue
 
                 # phase 1: scan the queue of boarding passengers
@@ -711,8 +856,17 @@ class ScannerOrchestrator:
                         "main.py",
                     )
                     logger.info("[LAUNCHING MAIN.PY] Boarding scenario...")
+
+                    # Capture passenger event counts BEFORE main.py runs
+                    # so we can track what happened during this stop only
+                    counts_before = self._get_session_counts()
+
                     subprocess.run([sys.executable, main_script])
                     logger.info("[MAIN.PY COMPLETE] Boarding scenario finished")
+
+                    # Check for boarding/alighting mismatches and generate
+                    # diagnostic alerts if anomalies are detected
+                    self._check_and_log_mismatches(scan_count, current_stop, counts_before)
                 else:
                     logger.info(
                         f"[SKIPPING MAIN.PY] No boardings happened "
@@ -721,6 +875,9 @@ class ScannerOrchestrator:
 
                 # phase 3: shuttle pulls away from this stop
                 self.advance_and_sync()
+                # brief pause so panelists can see the new stop
+                # announcement and transition clearly
+                time.sleep(2)
 
                 # phase 4: wait for the operator before next cycle
                 logger.info(

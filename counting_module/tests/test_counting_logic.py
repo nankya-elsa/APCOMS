@@ -86,6 +86,7 @@ class TestCountingLogicInitialization:
         """
         import sqlite3
         import os
+        os.environ.pop("TOTAL_CAPACITY", None)
         os.makedirs("local_database", exist_ok=True)
         conn = sqlite3.connect(TEST_DB)
         cursor = conn.cursor()
@@ -193,6 +194,15 @@ class TestCountingLogicInitialization:
         """
         logic = CountingLogic(db_path=TEST_DB)
         assert logic.designated_stops_list == ["Stop A", "Stop B", "Stop C"]
+
+    @patch.dict(os.environ, {"TOTAL_CAPACITY": "25"}, clear=False)
+    def test_uses_env_total_capacity_when_available(self):
+        """
+        Test that total capacity is loaded from the environment first
+        so deployment owners can change shuttle size without editing code.
+        """
+        logic = CountingLogic(db_path=TEST_DB)
+        assert logic.total_capacity == 25
 
     @patch.dict(os.environ, {"DESIGNATED_STOPS": "Stop A, Stop B, Stop C"}, clear=False)
     def test_clamps_stale_stop_index_when_route_shortens(self):

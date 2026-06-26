@@ -26,6 +26,7 @@ function refreshBookings() {
         "<th>From</th>" +
         "<th>To</th>" +
         "<th>Status</th>" +
+        "<th>Cancel Reason</th>" +
         "</tr></thead><tbody>";
       bookings.forEach((b) => {
         const shortId =
@@ -33,6 +34,9 @@ function refreshBookings() {
             ? b.booking_id.slice(0, 10) + "..."
             : b.booking_id;
         const statusClass = "booking-status-" + b.status;
+        const cancelReason = b.cancel_reason
+          ? b.cancel_reason.replace(/_/g, " ")
+          : "—";
         html +=
           "<tr>" +
           "<td>" +
@@ -52,6 +56,9 @@ function refreshBookings() {
           '">' +
           b.status +
           "</span></td>" +
+          "<td>" +
+          cancelReason +
+          "</td>" +
           "</tr>";
       });
       html += "</tbody></table>";

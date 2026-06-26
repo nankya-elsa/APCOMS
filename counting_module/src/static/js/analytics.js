@@ -481,7 +481,6 @@ function renderBookingFunnelChart(funnelData) {
     },
   });
 }
-
 // NO-SHOW RATE BY STOP CHART - bar chart of % no-show per stop,
 // sorted descending so worst stops appear first. Red bars draw
 // the eye to problem stops needing operational attention.

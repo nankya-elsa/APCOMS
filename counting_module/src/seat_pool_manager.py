@@ -24,8 +24,9 @@ and mobile app stay consistent with the local source of truth.
 import sqlite3
 import json
 import logging
+import os
 
-from route_config import get_designated_stops
+from route_config import get_designated_stops, get_total_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,30 @@ class SeatPoolManager:
         except (sqlite3.Error, ValueError, TypeError):
             return self.total_capacity
 
+    def _get_effective_available_seats(self, current_count=0):
+        """
+        Resolve the seat count to push to Firebase.
+
+        When TOTAL_CAPACITY is set in the environment, treat stale
+        SQLite values above the new capacity as outdated and clamp
+        the payload to the new effective capacity minus the current
+        passenger count.
+        """
+        env_capacity = os.getenv("TOTAL_CAPACITY")
+        if env_capacity is None or not str(env_capacity).strip():
+            return self.get_current()
+
+        try:
+            env_capacity_value = int(str(env_capacity).strip())
+        except (TypeError, ValueError):
+            return self.get_current()
+
+        stored_value = self.get_current()
+        if stored_value > env_capacity_value:
+            return max(env_capacity_value - int(current_count), 0)
+
+        return stored_value
+
     def increment(self, reason):
         """
         Release a seat back to the pool (cap at total_capacity).
@@ -84,7 +109,7 @@ class SeatPoolManager:
         new_value = min(current + 1, self.total_capacity)
         self._write(new_value)
         logger.info(f"Seat released ({reason}) -- available_seats now {new_value}")
-        self._sync_to_firebase()
+        self._sync_to_firebase(available_seats_override=new_value)
 
     def decrement(self, reason):
         """
@@ -97,7 +122,7 @@ class SeatPoolManager:
         new_value = max(current - 1, 0)
         self._write(new_value)
         logger.info(f"Seat held ({reason}) -- available_seats now {new_value}")
-        self._sync_to_firebase()
+        self._sync_to_firebase(available_seats_override=new_value)
 
     def _write(self, new_value):
         """Persist the new available_seats value to system_state."""
@@ -113,7 +138,7 @@ class SeatPoolManager:
         except sqlite3.Error as e:
             logger.error(f"Failed to write available_seats: {e}")
 
-    def _sync_to_firebase(self):
+    def _sync_to_firebase(self, available_seats_override=None):
         """
         Push the full occupancy payload to Firebase.
 
@@ -155,7 +180,15 @@ class SeatPoolManager:
 
         stops = get_designated_stops(self.db_path)
 
-        available_seats = self.get_current()
+        if available_seats_override is not None:
+            available_seats = available_seats_override
+        elif os.getenv("TOTAL_CAPACITY") is not None and str(os.getenv("TOTAL_CAPACITY")).strip():
+            available_seats = self._get_effective_available_seats(current_count)
+        else:
+            available_seats = max(
+                int(get_total_capacity(db_path=self.db_path, default=self.total_capacity)) - current_count,
+                0,
+            )
 
         # compute next_stop with wraparound
         if stops:

@@ -24,6 +24,26 @@ DEFAULT_DESIGNATED_STOPS = [
 ]
 
 
+def get_total_capacity(db_path=None, default=20):
+    """
+    Resolve the effective total capacity.
+
+    Precedence order:
+    1. TOTAL_CAPACITY from the environment (.env / process env)
+    2. provided default
+    """
+    env_value = os.getenv("TOTAL_CAPACITY")
+    if env_value is not None and str(env_value).strip():
+        try:
+            parsed = int(str(env_value).strip())
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            logger.warning("Invalid TOTAL_CAPACITY in environment; falling back")
+
+    return int(default) if default is not None else 20
+
+
 def _parse_stop_list(value):
     """Parse a stop list from env/SQLite/json/list input."""
     if value is None:

@@ -46,7 +46,7 @@ import datetime
 import logging
 import sqlite3
 
-from route_config import get_designated_stops
+from route_config import get_designated_stops, get_total_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -294,12 +294,10 @@ class ServiceDayManager:
                 )
             """)
 
-            # read total_capacity for available_seats; default 20
-            cursor.execute(
-                "SELECT value FROM system_state WHERE key='total_capacity'"
+            total_capacity = get_total_capacity(
+                db_path=self.db_path,
+                default=20,
             )
-            row = cursor.fetchone()
-            total_capacity = row[0] if row else "20"
 
             # read designated_stops to get the first stop name; default Western Gate
             stops = get_designated_stops(self.db_path)
