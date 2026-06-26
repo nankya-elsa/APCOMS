@@ -397,7 +397,7 @@ class TestFirebaseSyncPayload:
         from unittest.mock import patch
         # Mock designated stops to be just 4 stops for this test
         test_stops = ["Stop A", "Stop B", "Stop C", "Stop D"]
-        
+
         with patch('seat_pool_manager.get_designated_stops', return_value=test_stops):
             _set_state("available_seats", 10)
             _set_state("current_stop_index", current_idx)  # last of 4 stops

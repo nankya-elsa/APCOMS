@@ -4,7 +4,7 @@ Service Hours Manager Component for APCOMS
 Manages service start/end times stored in SQLite and syncs them to Firebase
 so the mobile app can enforce booking hour restrictions.
 
-The app listens to /shuttles/{shuttle_id}/service_start_time and 
+The app listens to /shuttles/{shuttle_id}/service_start_time and
 /shuttles/{shuttle_id}/service_end_time and adjusts booking restrictions
 dynamically. If the admin changes hours in the dashboard, Firebase
 automatically updates and the app picks up the new restriction instantly.
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class ServiceHoursManager:
     """
     Manages service hours from SQLite and syncs to Firebase.
-    
+
     Attributes:
         db_path: Path to the SQLite database
         shuttle_id: Identifier for this shuttle
@@ -169,7 +169,7 @@ class ServiceHoursManager:
                 return False
 
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
+
             payload = {
                 "service_start_time": start_time,
                 "service_end_time": end_time,
@@ -178,7 +178,7 @@ class ServiceHoursManager:
 
             # Update Firebase with service hours
             self.firebase_ref.update(payload)
-            
+
             self._last_sync_time = datetime.datetime.now()
             logger.info(
                 f"Service hours synced to Firebase: {start_time} - {end_time}"

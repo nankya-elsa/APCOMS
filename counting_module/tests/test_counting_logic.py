@@ -90,7 +90,7 @@ class TestCountingLogicInitialization:
         # TOTAL_CAPACITY from .env is loaded at route_config module import time
         # and is the single source of truth
         logic = CountingLogic(db_path=TEST_DB)
-        
+
         # Should use .env value (TOTAL_CAPACITY=20 from the .env file)
         assert logic.total_capacity == 20
 
